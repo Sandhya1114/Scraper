@@ -1,432 +1,536 @@
-import React, { useState } from 'react';
-import { Search, Download, Copy, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { LogIn, LogOut, BarChart3, AlertCircle, Lightbulb, RefreshCw } from 'lucide-react';
 
-const LinkedInScraper = () => {
-  const [url, setUrl] = useState('');
+export default function LinkedInAnalyzer() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [token, setToken] = useState('');
+  const [analysis, setAnalysis] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
   const [error, setError] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [userName, setUserName] = useState('');
 
-  const handleScrape = async () => {
-    if (!url.trim()) {
-      setError('Please enter a LinkedIn URL');
-      return;
+  // Check if user logged in (from callback)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const accessToken = params.get('token');
+    if (accessToken) {
+      setToken(accessToken);
+      setIsLoggedIn(true);
+      console.log('✅ Logged in successfully!');
+      // Clean URL
+      window.history.replaceState({}, document.title, window.location.pathname);
     }
+  }, []);
 
+  // Login Function
+  const handleLogin = () => {
+    console.log('🔗 Redirecting to LinkedIn login...');
+    window.location.href = 'http://localhost:5000/auth/linkedin';
+  };
+
+  // Analyze Profile Function
+  const handleAnalyze = async () => {
     setLoading(true);
     setError('');
-    setResult(null);
+    setAnalysis(null);
+    setProfile(null);
 
     try {
-      const response = await fetch('http://localhost:5000/api/scrape', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profileUrl: url }),
-      });
-
+      console.log('📊 Fetching profile analysis...');
+      
+      const response = await fetch(`http://localhost:5000/api/profile?token=${token}`);
       const data = await response.json();
 
-      if (data.success || data.data) {
-        setResult(data.data || data);
+      if (data.success) {
+        setProfile(data.profile);
+        setAnalysis(data.analysis);
+        setUserName(data.profile.firstName || 'User');
+        console.log('✅ Analysis complete!');
       } else {
-        setError(data.error || 'Failed to scrape profile');
+        setError(data.error || 'Failed to analyze profile');
+        console.error('❌ Error:', data.message);
       }
     } catch (err) {
-      setError(`Connection error: ${err.message}. Make sure backend is running on port 5000`);
+      setError('Connection error: Make sure backend is running on port 5000');
+      console.error('❌ Connection error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(JSON.stringify(result, null, 2));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  // Logout Function
+  const handleLogout = async () => {
+    try {
+      await fetch('http://localhost:5000/api/logout');
+      setIsLoggedIn(false);
+      setToken('');
+      setProfile(null);
+      setAnalysis(null);
+      setUserName('');
+      console.log('✅ Logged out successfully');
+    } catch (err) {
+      console.error('❌ Logout error:', err);
+    }
   };
 
-  const handleDownload = () => {
-    const element = document.createElement('a');
-    element.setAttribute('href', `data:text/plain;charset=utf-8,${encodeURIComponent(JSON.stringify(result, null, 2))}`);
-    element.setAttribute('download', `profile_${Date.now()}.json`);
-    element.style.display = 'none';
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
+  // Get color based on score
+  const getScoreColor = (score) => {
+    if (score >= 80) return '#10b981'; // Green
+    if (score >= 60) return '#f59e0b'; // Orange
+    if (score >= 40) return '#ef4444'; // Red
+    return '#dc2626'; // Dark Red
+  };
+
+  const getScoreLabel = (score) => {
+    if (score >= 80) return '🌟 Excellent';
+    if (score >= 60) return '👍 Good';
+    if (score >= 40) return '⚠️ Fair';
+    return '❌ Needs Work';
   };
 
   return (
-    <div className="scraper-container">
-      <div className="scraper-header">
-        <h1>LinkedIn Profile Scraper</h1>
-        <p>Enter a profile URL to extract public information</p>
+    <div style={styles.container}>
+      {/* HEADER */}
+      <header style={styles.header}>
+        <h1>🔍 LinkedIn Profile Analyzer</h1>
+        <p>Analyze your profile & get improvement suggestions</p>
+      </header>
+
+      {/* AUTH SECTION */}
+      <div style={styles.authSection}>
+        {!isLoggedIn ? (
+          <div style={styles.authBox}>
+            <h2>Welcome!</h2>
+            <p>Sign in with LinkedIn to analyze your profile</p>
+            <button onClick={handleLogin} style={styles.loginBtn}>
+              <LogIn size={20} /> Sign In with LinkedIn
+            </button>
+          </div>
+        ) : (
+          <div style={styles.loggedInBox}>
+            <div style={styles.userInfo}>
+              <span style={styles.welcomeText}>✅ Logged in with LinkedIn</span>
+              {userName && <span style={styles.userName}>Hello, {userName}! 👋</span>}
+            </div>
+            <div style={styles.actionButtons}>
+              <button onClick={handleAnalyze} disabled={loading} style={styles.analyzeBtn}>
+                {loading ? (
+                  <>
+                    <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite' }} />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <BarChart3 size={18} /> Analyze My Profile
+                  </>
+                )}
+              </button>
+              <button onClick={handleLogout} style={styles.logoutBtn}>
+                <LogOut size={18} /> Logout
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="scraper-card">
-        <div className="input-group">
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://www.linkedin.com/in/username/"
-            className="scraper-input"
-            disabled={loading}
-          />
-          <button
-            onClick={handleScrape}
-            disabled={loading}
-            className="scraper-button"
-          >
-            {loading ? (
-              <span className="loading-spinner"></span>
-            ) : (
-              <>
-                <Search size={20} />
-                Scrape
-              </>
-            )}
-          </button>
+      {/* ERROR MESSAGE */}
+      {error && (
+        <div style={styles.errorBox}>
+          <AlertCircle size={20} />
+          <div>
+            <strong>Error:</strong> {error}
+          </div>
         </div>
+      )}
 
-        {error && (
-          <div className="error-box">
-            <AlertCircle size={20} />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {result && (
-          <div className="result-box">
-            <div className="result-header">
-              <h2>Scraped Profile Data</h2>
-              <div className="result-actions">
-                <button
-                  onClick={handleCopy}
-                  className="action-button copy-button"
-                  title="Copy JSON"
-                >
-                  <Copy size={18} />
-                  {copied ? 'Copied!' : 'Copy'}
-                </button>
-                <button
-                  onClick={handleDownload}
-                  className="action-button download-button"
-                  title="Download JSON"
-                >
-                  <Download size={18} />
-                  Download
-                </button>
+      {/* RESULTS SECTION */}
+      {analysis && (
+        <div style={styles.resultsContainer}>
+          {/* OVERALL SCORE CARD */}
+          <div
+            style={{
+              ...styles.scoreCard,
+              borderTop: `4px solid ${getScoreColor(analysis.overallScore)}`,
+            }}
+          >
+            <BarChart3
+              size={32}
+              style={{ color: getScoreColor(analysis.overallScore) }}
+            />
+            <div style={styles.scoreInfo}>
+              <div style={styles.scoreLabel}>Overall Score</div>
+              <div
+                style={{
+                  ...styles.scoreValue,
+                  color: getScoreColor(analysis.overallScore),
+                }}
+              >
+                {analysis.overallScore}/100
               </div>
-            </div>
-
-            <div className="result-content">
-              {result.name && (
-                <div className="result-item">
-                  <span className="result-label">Name:</span>
-                  <span className="result-value">{result.name}</span>
-                </div>
-              )}
-              {result.headline && (
-                <div className="result-item">
-                  <span className="result-label">Headline:</span>
-                  <span className="result-value">{result.headline}</span>
-                </div>
-              )}
-              {result.location && (
-                <div className="result-item">
-                  <span className="result-label">Location:</span>
-                  <span className="result-value">{result.location}</span>
-                </div>
-              )}
-              <div className="result-item">
-                <span className="result-label">Scraped At:</span>
-                <span className="result-value">
-                  {result.scrapedAt || new Date().toLocaleString()}
-                </span>
-              </div>
-
-              <div className="json-display">
-                <p className="json-label">Full Data:</p>
-                <pre className="json-content">
-                  {JSON.stringify(result, null, 2)}
-                </pre>
+              <div style={styles.scoreStatus}>
+                {getScoreLabel(analysis.overallScore)}
               </div>
             </div>
           </div>
-        )}
 
-        {!result && !error && !loading && (
-          <div className="empty-state">
-            <Search size={48} />
-            <p>Enter a LinkedIn profile URL and click Scrape to get started</p>
+          {/* PROFILE INFO */}
+          {profile && (
+            <div style={styles.profileInfo}>
+              <h3>📋 Your Profile</h3>
+              <div style={styles.infoGrid}>
+                <div style={styles.infoItem}>
+                  <span style={styles.infoLabel}>Name:</span>
+                  <span style={styles.infoValue}>{profile.firstName} {profile.lastName}</span>
+                </div>
+                <div style={styles.infoItem}>
+                  <span style={styles.infoLabel}>Headline:</span>
+                  <span style={styles.infoValue}>{profile.headline}</span>
+                </div>
+                <div style={styles.infoItem}>
+                  <span style={styles.infoLabel}>Photo:</span>
+                  <span style={styles.infoValue}>{profile.hasPhoto ? '✓ Yes' : '✗ No'}</span>
+                </div>
+                <div style={styles.infoItem}>
+                  <span style={styles.infoLabel}>Experience:</span>
+                  <span style={styles.infoValue}>{profile.experiences} position(s)</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SECTION SCORES */}
+          <div style={styles.sectionsBox}>
+            <h3>📊 Section Breakdown</h3>
+            <div style={styles.sectionsGrid}>
+              {Object.entries(analysis.sections).map(([key, section]) => (
+                <div key={key} style={styles.sectionCard}>
+                  <div style={styles.sectionHeader}>
+                    <h4 style={styles.sectionTitle}>
+                      {key.charAt(0).toUpperCase() + key.slice(1)}
+                    </h4>
+                    <span style={styles.sectionScore}>
+                      {section.score}/{section.maxScore}
+                    </span>
+                  </div>
+                  <p style={styles.sectionStatus}>{section.status}</p>
+                  {section.length !== undefined && (
+                    <p style={styles.sectionLength}>
+                      {section.length} / {section.ideal}
+                    </p>
+                  )}
+                  {section.count !== undefined && (
+                    <p style={styles.sectionLength}>Count: {section.count}</p>
+                  )}
+                  <p style={styles.sectionFeedback}>{section.feedback}</p>
+                </div>
+              ))}
+            </div>
           </div>
-        )}
-      </div>
+
+          {/* ERRORS */}
+          {analysis.errors.length > 0 && (
+            <div style={styles.errorsBox}>
+              <div style={styles.errorHeader}>
+                <AlertCircle size={22} />
+                <h3>Issues to Fix ({analysis.errors.length})</h3>
+              </div>
+              <ul style={styles.list}>
+                {analysis.errors.map((error, i) => (
+                  <li key={i} style={styles.listItem}>
+                    {error}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* SUGGESTIONS */}
+          {analysis.suggestions.length > 0 && (
+            <div style={styles.suggestionsBox}>
+              <div style={styles.suggestionHeader}>
+                <Lightbulb size={22} />
+                <h3>Suggestions for Improvement</h3>
+              </div>
+              <ul style={styles.list}>
+                {analysis.suggestions.map((suggestion, i) => (
+                  <li key={i} style={styles.listItem}>
+                    {suggestion}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       <style>{`
-        .scraper-container {
-          min-height: 100vh;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          padding: 40px 20px;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-
-        .scraper-header {
-          text-align: center;
-          color: white;
-          margin-bottom: 40px;
-        }
-
-        .scraper-header h1 {
-          font-size: 2.5em;
-          margin: 0 0 10px 0;
-          font-weight: 700;
-        }
-
-        .scraper-header p {
-          font-size: 1.1em;
-          opacity: 0.9;
-          margin: 0;
-        }
-
-        .scraper-card {
-          max-width: 900px;
-          margin: 0 auto;
-          background: white;
-          border-radius: 12px;
-          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-          padding: 40px;
-          overflow: hidden;
-        }
-
-        .input-group {
-          display: flex;
-          gap: 12px;
-          margin-bottom: 24px;
-        }
-
-        .scraper-input {
-          flex: 1;
-          padding: 14px 18px;
-          border: 2px solid #e0e0e0;
-          border-radius: 8px;
-          font-size: 1em;
-          transition: border-color 0.3s;
-        }
-
-        .scraper-input:focus {
-          outline: none;
-          border-color: #667eea;
-        }
-
-        .scraper-input:disabled {
-          background: #f5f5f5;
-          cursor: not-allowed;
-        }
-
-        .scraper-button {
-          padding: 14px 28px;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          color: white;
-          border: none;
-          border-radius: 8px;
-          font-size: 1em;
-          font-weight: 600;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          transition: transform 0.2s, box-shadow 0.2s;
-        }
-
-        .scraper-button:hover:not(:disabled) {
-          transform: translateY(-2px);
-          box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
-        }
-
-        .scraper-button:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        .loading-spinner {
-          display: inline-block;
-          width: 18px;
-          height: 18px;
-          border: 3px solid rgba(255, 255, 255, 0.3);
-          border-top-color: white;
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        }
-
         @keyframes spin {
+          from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
-        }
-
-        .error-box {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 16px;
-          background: #fee;
-          border: 2px solid #fcc;
-          border-radius: 8px;
-          color: #c33;
-          margin-bottom: 24px;
-        }
-
-        .result-box {
-          background: #f9f9f9;
-          border: 2px solid #e0e0e0;
-          border-radius: 8px;
-          overflow: hidden;
-        }
-
-        .result-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 20px;
-          background: white;
-          border-bottom: 2px solid #e0e0e0;
-        }
-
-        .result-header h2 {
-          margin: 0;
-          font-size: 1.3em;
-          color: #333;
-        }
-
-        .result-actions {
-          display: flex;
-          gap: 8px;
-        }
-
-        .action-button {
-          padding: 10px 16px;
-          border: none;
-          border-radius: 6px;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 0.95em;
-          font-weight: 600;
-          transition: all 0.2s;
-        }
-
-        .copy-button {
-          background: #e3f2fd;
-          color: #1976d2;
-        }
-
-        .copy-button:hover {
-          background: #bbdefb;
-        }
-
-        .download-button {
-          background: #f3e5f5;
-          color: #7b1fa2;
-        }
-
-        .download-button:hover {
-          background: #e1bee7;
-        }
-
-        .result-content {
-          padding: 20px;
-        }
-
-        .result-item {
-          display: flex;
-          gap: 12px;
-          margin-bottom: 14px;
-          padding: 10px;
-          background: white;
-          border-radius: 6px;
-        }
-
-        .result-label {
-          font-weight: 600;
-          color: #667eea;
-          min-width: 120px;
-        }
-
-        .result-value {
-          color: #333;
-          word-break: break-word;
-        }
-
-        .json-display {
-          margin-top: 20px;
-          padding-top: 20px;
-          border-top: 2px solid #e0e0e0;
-        }
-
-        .json-label {
-          font-weight: 600;
-          color: #667eea;
-          margin-bottom: 10px;
-        }
-
-        .json-content {
-          background: #1e1e1e;
-          color: #d4d4d4;
-          padding: 16px;
-          border-radius: 6px;
-          overflow-x: auto;
-          font-size: 0.85em;
-          line-height: 1.5;
-          margin: 0;
-        }
-
-        .empty-state {
-          text-align: center;
-          padding: 60px 20px;
-          color: #999;
-        }
-
-        .empty-state svg {
-          margin-bottom: 20px;
-          opacity: 0.5;
-        }
-
-        .empty-state p {
-          font-size: 1.1em;
-          margin: 0;
-        }
-
-        @media (max-width: 600px) {
-          .scraper-header h1 {
-            font-size: 1.8em;
-          }
-
-          .scraper-card {
-            padding: 20px;
-          }
-
-          .input-group {
-            flex-direction: column;
-          }
-
-          .result-header {
-            flex-direction: column;
-            gap: 12px;
-            align-items: flex-start;
-          }
-
-          .result-actions {
-            width: 100%;
-          }
-
-          .action-button {
-            flex: 1;
-            justify-content: center;
-          }
         }
       `}</style>
     </div>
   );
-};
+}
 
-export default LinkedInScraper;
+const styles = {
+  container: {
+    minHeight: '100vh',
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    padding: '20px',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  },
+  header: {
+    textAlign: 'center',
+    color: 'white',
+    marginBottom: '40px',
+  },
+  authSection: {
+    maxWidth: '900px',
+    margin: '0 auto 30px',
+  },
+  authBox: {
+    background: 'white',
+    borderRadius: '12px',
+    padding: '40px',
+    textAlign: 'center',
+    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+  },
+  loggedInBox: {
+    background: 'white',
+    borderRadius: '12px',
+    padding: '25px',
+    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+  },
+  userInfo: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '20px',
+    flexWrap: 'wrap',
+    gap: '10px',
+  },
+  welcomeText: {
+    fontSize: '1.1em',
+    fontWeight: '600',
+    color: '#10b981',
+  },
+  userName: {
+    fontSize: '1em',
+    color: '#667eea',
+    fontWeight: '600',
+  },
+  actionButtons: {
+    display: 'flex',
+    gap: '10px',
+    flexWrap: 'wrap',
+  },
+  loginBtn: {
+    padding: '14px 28px',
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '1em',
+    fontWeight: '600',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '8px',
+    transition: 'transform 0.2s',
+  },
+  analyzeBtn: {
+    flex: 1,
+    minWidth: '200px',
+    padding: '12px 24px',
+    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '1em',
+    fontWeight: '600',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    transition: 'transform 0.2s',
+  },
+  logoutBtn: {
+    padding: '12px 24px',
+    background: '#ef4444',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '1em',
+    fontWeight: '600',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  errorBox: {
+    maxWidth: '900px',
+    margin: '0 auto 20px',
+    background: '#fee',
+    border: '2px solid #fcc',
+    color: '#c33',
+    padding: '16px',
+    borderRadius: '8px',
+    display: 'flex',
+    gap: '12px',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+  },
+  resultsContainer: {
+    maxWidth: '900px',
+    margin: '0 auto',
+  },
+  scoreCard: {
+    background: 'white',
+    borderRadius: '12px',
+    padding: '25px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '20px',
+    marginBottom: '20px',
+    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+  },
+  scoreInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  scoreLabel: {
+    fontSize: '0.9em',
+    color: '#666',
+    marginBottom: '5px',
+  },
+  scoreValue: {
+    fontSize: '2.5em',
+    fontWeight: '700',
+  },
+  scoreStatus: {
+    fontSize: '0.95em',
+    color: '#666',
+    marginTop: '5px',
+  },
+  profileInfo: {
+    background: 'white',
+    borderRadius: '12px',
+    padding: '20px',
+    marginBottom: '20px',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+  },
+  infoGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+    gap: '15px',
+    marginTop: '15px',
+  },
+  infoItem: {
+    background: '#f9f9f9',
+    padding: '12px',
+    borderRadius: '8px',
+  },
+  infoLabel: {
+    display: 'block',
+    fontWeight: '600',
+    color: '#667eea',
+    marginBottom: '5px',
+  },
+  infoValue: {
+    display: 'block',
+    color: '#333',
+  },
+  sectionsBox: {
+    background: 'white',
+    borderRadius: '12px',
+    padding: '20px',
+    marginBottom: '20px',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+  },
+  sectionsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: '15px',
+    marginTop: '15px',
+  },
+  sectionCard: {
+    background: '#f9f9f9',
+    border: '2px solid #e0e0e0',
+    borderRadius: '8px',
+    padding: '15px',
+  },
+  sectionHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '10px',
+  },
+  sectionTitle: {
+    margin: 0,
+    fontSize: '0.95em',
+    fontWeight: '600',
+  },
+  sectionScore: {
+    background: '#e3f2fd',
+    color: '#1976d2',
+    padding: '4px 8px',
+    borderRadius: '4px',
+    fontSize: '0.85em',
+    fontWeight: '600',
+  },
+  sectionStatus: {
+    margin: '5px 0',
+    fontSize: '0.9em',
+  },
+  sectionLength: {
+    margin: '5px 0',
+    fontSize: '0.85em',
+    color: '#999',
+  },
+  sectionFeedback: {
+    margin: '8px 0 0 0',
+    fontSize: '0.85em',
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  errorsBox: {
+    background: '#fee',
+    border: '2px solid #fcc',
+    color: '#c33',
+    borderRadius: '12px',
+    padding: '20px',
+    marginBottom: '20px',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+  },
+  errorHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginBottom: '15px',
+  },
+  suggestionsBox: {
+    background: '#ffe',
+    border: '2px solid #ffd',
+    color: '#996600',
+    borderRadius: '12px',
+    padding: '20px',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+  },
+  suggestionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginBottom: '15px',
+  },
+  list: {
+    listStyle: 'none',
+    margin: 0,
+    padding: 0,
+  },
+  listItem: {
+    padding: '8px 0',
+    borderBottom: '1px solid rgba(0,0,0,0.1)',
+  },
+};
