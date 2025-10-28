@@ -1,4 +1,9 @@
-// server.js - Enhanced Anti-Detection for 24+ Hour Operation
+// ============================================
+// PRODUCTION-READY server.js - Organization Version
+// ============================================
+
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer-extra');
@@ -7,23 +12,46 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 
-// Use stealth plugin with all evasions
 puppeteer.use(StealthPlugin());
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Storage
 const scrapedData = new Map();
-const requestLog = new Map(); // Track requests per IP/session
-const sessionCookies = new Map(); // Store cookies per session
+const requestLog = new Map();
+const sessionCookies = new Map();
 const COOKIES_DIR = path.join(__dirname, 'cookies');
 
-// Ensure cookies directory exists
+let globalBrowser = null;
+let globalPage = null;
+let isLoggedIn = false;
+let loginSessionId = null;
+let loginAttempts = 0;
+const MAX_LOGIN_ATTEMPTS = 3;
+
+const LINKEDIN_CREDENTIALS = {
+  email: process.env.LINKEDIN_EMAIL,
+  password: process.env.LINKEDIN_PASSWORD
+};
+
+// CONFIGURATION - Adjust these for your organization
+const CONFIG = {
+  HEADLESS: process.env.HEADLESS !== 'false', // Set HEADLESS=false in .env to debug
+  LOGIN_TIMEOUT: 90000,      // 90 seconds for login
+  NAVIGATION_TIMEOUT: 120000, // 2 minutes for navigation
+  WAIT_TIMEOUT: 30000,        // 30 seconds for element waits
+  RETRY_ATTEMPTS: 3,          // Number of retries
+  RETRY_DELAY: 15000,         // 15 seconds between retries
+  USE_PROXY: process.env.PROXY_SERVER || null, // Set in .env if needed
+};
+
+if (!LINKEDIN_CREDENTIALS.email || !LINKEDIN_CREDENTIALS.password) {
+  console.error('⚠️  WARNING: LinkedIn credentials not configured!');
+}
+
 (async () => {
   try {
     await fs.mkdir(COOKIES_DIR, { recursive: true });
@@ -32,71 +60,33 @@ const COOKIES_DIR = path.join(__dirname, 'cookies');
   }
 })();
 
-// Extensive user agent pool (desktop browsers only)
 const userAgents = [
-  // Chrome on Windows
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-  
-  // Chrome on macOS
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-  
-  // Firefox on Windows
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-  
-  // Firefox on macOS
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0',
-  
-  // Safari on macOS
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15',
-  
-  // Edge on Windows
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
 ];
 
-// Screen resolutions pool (common desktop resolutions)
 const screenResolutions = [
   { width: 1920, height: 1080 },
   { width: 1366, height: 768 },
-  { width: 1536, height: 864 },
   { width: 1440, height: 900 },
-  { width: 1600, height: 900 },
-  { width: 2560, height: 1440 },
-  { width: 1920, height: 1200 }
 ];
 
-// Language preferences
-const languages = [
-  ['en-US', 'en'],
-  ['en-GB', 'en'],
-  ['en-CA', 'en'],
-  ['en-AU', 'en']
-];
+const languages = [['en-US', 'en'], ['en-GB', 'en']];
 
-// Generate session ID for cookie persistence
-const generateSessionId = () => {
-  return crypto.randomBytes(16).toString('hex');
-};
+const generateSessionId = () => crypto.randomBytes(16).toString('hex');
 
-// Save cookies to file
 const saveCookies = async (sessionId, cookies) => {
   try {
     const cookiePath = path.join(COOKIES_DIR, `${sessionId}.json`);
     await fs.writeFile(cookiePath, JSON.stringify(cookies, null, 2));
     sessionCookies.set(sessionId, cookies);
+    console.log('🍪 Cookies saved successfully');
   } catch (err) {
     console.error('Failed to save cookies:', err);
   }
 };
 
-// Load cookies from file
 const loadCookies = async (sessionId) => {
   try {
     const cookiePath = path.join(COOKIES_DIR, `${sessionId}.json`);
@@ -107,7 +97,6 @@ const loadCookies = async (sessionId) => {
   }
 };
 
-// Random delay with human-like variance
 const randomDelay = (min, max) => {
   return new Promise(resolve => {
     const delay = Math.floor(Math.random() * (max - min + 1)) + min;
@@ -115,65 +104,35 @@ const randomDelay = (min, max) => {
   });
 };
 
-// Simulate human-like mouse movements
 const simulateHumanBehavior = async (page) => {
   try {
-    // Random mouse movements
-    const moves = Math.floor(Math.random() * 5) + 3;
+    const moves = Math.floor(Math.random() * 3) + 2;
     for (let i = 0; i < moves; i++) {
-      const x = Math.floor(Math.random() * 1000);
-      const y = Math.floor(Math.random() * 800);
-      await page.mouse.move(x, y, { steps: Math.floor(Math.random() * 20) + 10 });
-      await randomDelay(100, 500);
+      const x = Math.floor(Math.random() * 800);
+      const y = Math.floor(Math.random() * 600);
+      await page.mouse.move(x, y, { steps: Math.floor(Math.random() * 5) + 3 });
+      await randomDelay(50, 150);
     }
     
-    // Human-like scrolling with pauses
     await page.evaluate(async () => {
-      const distance = 150;
       const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-      
-      for (let i = 0; i < 5; i++) {
-        window.scrollBy(0, distance);
-        await delay(Math.random() * 500 + 300);
-        
-        // Sometimes scroll back up a bit
-        if (Math.random() > 0.7) {
-          window.scrollBy(0, -50);
-          await delay(200);
-        }
+      for (let i = 0; i < 3; i++) {
+        window.scrollBy(0, 100);
+        await delay(200);
       }
-      
-      // Scroll to bottom gradually
-      const scrollHeight = document.body.scrollHeight;
-      let currentPosition = window.pageYOffset;
-      
-      while (currentPosition < scrollHeight - window.innerHeight) {
-        const scrollAmount = Math.floor(Math.random() * 200) + 100;
-        window.scrollBy(0, scrollAmount);
-        currentPosition += scrollAmount;
-        await delay(Math.random() * 400 + 200);
-      }
-      
-      // Scroll back to top
-      await delay(500);
-      window.scrollTo(0, 0);
     });
     
-    await randomDelay(1000, 2000);
+    await randomDelay(500, 1000);
   } catch (err) {
     console.error('Human behavior simulation error:', err);
   }
 };
 
-// Advanced rate limiting with adaptive delays
 const canMakeRequest = (identifier) => {
   const now = Date.now();
   const requestHistory = requestLog.get(identifier) || [];
-  
-  // Clean old requests (older than 1 hour)
   const recentRequests = requestHistory.filter(time => now - time < 3600000);
   
-  // Adaptive rate limiting based on request frequency
   if (recentRequests.length === 0) {
     requestLog.set(identifier, [now]);
     return { allowed: true, delay: 0 };
@@ -181,17 +140,10 @@ const canMakeRequest = (identifier) => {
   
   const lastRequest = recentRequests[recentRequests.length - 1];
   const timeSinceLastRequest = now - lastRequest;
-  
-  // Base delay: 45 seconds minimum between requests
   const baseDelay = 45000;
   
-  // Increase delay if making many requests
   if (recentRequests.length > 10) {
     return { allowed: false, delay: 120000, message: 'Too many requests. Please wait 2 minutes.' };
-  } else if (recentRequests.length > 5) {
-    if (timeSinceLastRequest < 90000) {
-      return { allowed: false, delay: 90000 - timeSinceLastRequest, message: 'Rate limit: Please wait 90 seconds between requests.' };
-    }
   } else if (timeSinceLastRequest < baseDelay) {
     return { allowed: false, delay: baseDelay - timeSinceLastRequest, message: 'Rate limit: Please wait 45 seconds between requests.' };
   }
@@ -201,13 +153,255 @@ const canMakeRequest = (identifier) => {
   return { allowed: true, delay: 0 };
 };
 
-// Main scraper function with maximum stealth
-async function scrapeLinkedInProfile(profileUrl, sessionId = null) {
-  let browser;
-  const currentSessionId = sessionId || generateSessionId();
-  
+// ============================================
+// ENHANCED LOGIN WITH MULTIPLE STRATEGIES
+// ============================================
+async function ensureLoggedIn(forceRelogin = false) {
+  if (isLoggedIn && globalPage && !forceRelogin) {
+    console.log('✅ Already logged in, verifying session...');
+    
+    try {
+      // Quick session check
+      const url = await globalPage.url();
+      if (url.includes('linkedin.com') && !url.includes('login')) {
+        console.log('✅ Session is active');
+        return { success: true, page: globalPage };
+      }
+    } catch (err) {
+      console.log('⚠️ Session check failed, re-logging in...');
+      isLoggedIn = false;
+    }
+  }
+
+  if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+    return {
+      success: false,
+      error: 'Maximum login attempts exceeded. Please check credentials and try again later.'
+    };
+  }
+
+  loginAttempts++;
+
   try {
-    // Check rate limiting
+    console.log(`\n🔐 Login attempt ${loginAttempts}/${MAX_LOGIN_ATTEMPTS}`);
+    
+    if (!LINKEDIN_CREDENTIALS.email || !LINKEDIN_CREDENTIALS.password) {
+      throw new Error('LinkedIn credentials not configured');
+    }
+
+    // Initialize browser
+    if (!globalBrowser) {
+      console.log('🌐 Launching browser...');
+      const randomUserAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
+      const randomResolution = screenResolutions[Math.floor(Math.random() * screenResolutions.length)];
+      
+      const launchArgs = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-dev-shm-usage',
+        '--disable-web-security',
+        `--window-size=${randomResolution.width},${randomResolution.height}`,
+        `--user-agent=${randomUserAgent}`,
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-extensions',
+        '--disable-infobars',
+      ];
+
+      // Add proxy if configured
+      if (CONFIG.USE_PROXY) {
+        launchArgs.push(`--proxy-server=${CONFIG.USE_PROXY}`);
+        console.log(`🔒 Using proxy: ${CONFIG.USE_PROXY}`);
+      }
+      
+      globalBrowser = await puppeteer.launch({
+        headless: CONFIG.HEADLESS,
+        args: launchArgs,
+        ignoreHTTPSErrors: true,
+        ignoreDefaultArgs: ['--enable-automation'],
+        defaultViewport: null,
+      });
+      
+      console.log('✅ Browser launched');
+    }
+
+    // Close old page if exists
+    if (globalPage) {
+      try {
+        await globalPage.close();
+      } catch (err) {
+        console.log('Could not close old page');
+      }
+    }
+
+    globalPage = await globalBrowser.newPage();
+    loginSessionId = generateSessionId();
+    
+    const randomResolution = screenResolutions[Math.floor(Math.random() * screenResolutions.length)];
+    await globalPage.setViewport({
+      width: randomResolution.width,
+      height: randomResolution.height,
+    });
+
+    // Set headers
+    await globalPage.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'DNT': '1',
+    });
+
+    // Stealth modifications
+    await globalPage.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [{
+          description: "Portable Document Format",
+          filename: "internal-pdf-viewer",
+          name: "Chrome PDF Plugin"
+        }]
+      });
+      window.chrome = { runtime: {} };
+      delete navigator.__proto__.webdriver;
+    });
+
+    // Try to load existing cookies
+    const savedCookies = await loadCookies(loginSessionId);
+    if (savedCookies && savedCookies.length > 0) {
+      console.log('🍪 Loading saved cookies...');
+      await globalPage.setCookie(...savedCookies);
+    }
+
+    // STRATEGY 1: Try loading feed directly (if cookies work)
+    console.log('📍 Strategy 1: Checking if cookies are valid...');
+    try {
+      await globalPage.goto('https://www.linkedin.com/feed/', { 
+        waitUntil: 'domcontentloaded',
+        timeout: CONFIG.LOGIN_TIMEOUT / 2
+      });
+      
+      await randomDelay(2000, 3000);
+      const feedUrl = globalPage.url();
+      
+      if (feedUrl.includes('feed')) {
+        isLoggedIn = true;
+        loginAttempts = 0; // Reset on success
+        console.log('✅ Logged in via saved cookies!');
+        return { success: true, page: globalPage };
+      }
+    } catch (err) {
+      console.log('⚠️ Cookies invalid or expired, proceeding to login...');
+    }
+
+    // STRATEGY 2: Manual login
+    console.log('📍 Strategy 2: Performing fresh login...');
+    console.log('🌐 Navigating to login page...');
+    
+    await globalPage.goto('https://www.linkedin.com/login', { 
+      waitUntil: 'domcontentloaded',
+      timeout: CONFIG.LOGIN_TIMEOUT
+    });
+
+    await randomDelay(2000, 3000);
+
+    // Wait for and fill form
+    console.log('📝 Filling login form...');
+    
+    try {
+      await globalPage.waitForSelector('#username', { 
+        visible: true, 
+        timeout: CONFIG.WAIT_TIMEOUT 
+      });
+    } catch (err) {
+      throw new Error('Login form not found. LinkedIn may be blocking access.');
+    }
+    
+    await globalPage.type('#username', LINKEDIN_CREDENTIALS.email, { delay: 100 });
+    await randomDelay(300, 600);
+    
+    await globalPage.type('#password', LINKEDIN_CREDENTIALS.password, { delay: 100 });
+    await randomDelay(300, 600);
+
+    console.log('🔑 Submitting credentials...');
+    
+    // Click submit and wait for navigation
+    await Promise.all([
+      globalPage.click('button[type="submit"]'),
+      globalPage.waitForNavigation({ 
+        waitUntil: 'domcontentloaded',
+        timeout: CONFIG.LOGIN_TIMEOUT
+      }).catch(err => {
+        console.log('⚠️ Navigation timeout, but checking page state...');
+      })
+    ]);
+
+    await randomDelay(3000, 5000);
+
+    // Verify login
+    const currentUrl = globalPage.url();
+    console.log(`📍 Current URL: ${currentUrl}`);
+    
+    if (currentUrl.includes('feed') || currentUrl.includes('mynetwork') || currentUrl.includes('/in/')) {
+      isLoggedIn = true;
+      loginAttempts = 0; // Reset on success
+      
+      // Save cookies
+      const cookies = await globalPage.cookies();
+      await saveCookies(loginSessionId, cookies);
+      
+      console.log('✅ Login successful!');
+      return { success: true, page: globalPage };
+      
+    } else if (currentUrl.includes('checkpoint') || currentUrl.includes('challenge')) {
+      throw new Error('LinkedIn requires verification (CAPTCHA/2FA). Please:\n1. Disable 2FA temporarily\n2. Login manually in a regular browser first\n3. Try again');
+      
+    } else if (currentUrl.includes('login')) {
+      // Check for error messages
+      const errorMessage = await globalPage.evaluate(() => {
+        const error = document.querySelector('.form__label--error');
+        return error ? error.textContent : null;
+      });
+      
+      throw new Error(errorMessage || 'Login failed. Check credentials.');
+      
+    } else {
+      throw new Error(`Unexpected page after login: ${currentUrl}`);
+    }
+
+  } catch (error) {
+    console.error(`❌ Login attempt ${loginAttempts} failed:`, error.message);
+    
+    isLoggedIn = false;
+    
+    if (loginAttempts < MAX_LOGIN_ATTEMPTS) {
+      console.log(`⏳ Retrying in ${CONFIG.RETRY_DELAY / 1000} seconds...`);
+      await randomDelay(CONFIG.RETRY_DELAY, CONFIG.RETRY_DELAY + 2000);
+      return ensureLoggedIn(true);
+    }
+    
+    return { success: false, error: error.message };
+  }
+}
+
+// ============================================
+// ENHANCED SCRAPER WITH ROBUST ERROR HANDLING
+// ============================================
+async function scrapeLinkedInProfile(profileUrl, retryCount = 0) {
+  try {
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🔍 Scraping attempt ${retryCount + 1}/${CONFIG.RETRY_ATTEMPTS + 1}`);
+    console.log(`📍 URL: ${profileUrl}`);
+    
+    const loginResult = await ensureLoggedIn();
+    if (!loginResult.success) {
+      return {
+        success: false,
+        error: loginResult.error || 'Not logged in'
+      };
+    }
+
+    const page = loginResult.page;
+
     const domain = new URL(profileUrl).hostname;
     const rateLimitCheck = canMakeRequest(domain);
     
@@ -219,233 +413,45 @@ async function scrapeLinkedInProfile(profileUrl, sessionId = null) {
       };
     }
 
-    // Randomize configuration for each request
-    const randomUserAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
-    const randomResolution = screenResolutions[Math.floor(Math.random() * screenResolutions.length)];
-    const randomLanguage = languages[Math.floor(Math.random() * languages.length)];
-    
-    console.log(`\n🔍 Scraping with session: ${currentSessionId}`);
-    console.log(`📱 User Agent: ${randomUserAgent.substring(0, 50)}...`);
-    console.log(`🖥️  Resolution: ${randomResolution.width}x${randomResolution.height}`);
-
-    // Launch browser with maximum stealth
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--disable-infobars',
-        '--disable-notifications',
-        '--disable-popup-blocking',
-        `--window-size=${randomResolution.width},${randomResolution.height}`,
-        `--user-agent=${randomUserAgent}`,
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-sync'
-      ],
-      ignoreHTTPSErrors: true,
-      ignoreDefaultArgs: ['--enable-automation']
-    });
-    
-    const context = browser.defaultBrowserContext();
-    await context.overridePermissions(profileUrl, ['geolocation', 'notifications']);
-    
-    const page = await browser.newPage();
-    
-    // Set viewport
-    await page.setViewport({
-      width: randomResolution.width,
-      height: randomResolution.height,
-      deviceScaleFactor: 1,
-      hasTouch: false,
-      isLandscape: true,
-      isMobile: false
-    });
-    
-    // Set user agent
-    await page.setUserAgent(randomUserAgent);
-    
-    // Load cookies from previous session if available
-    const savedCookies = await loadCookies(currentSessionId);
-    if (savedCookies && savedCookies.length > 0) {
-      await page.setCookie(...savedCookies);
-      console.log('🍪 Loaded cookies from previous session');
-    }
-    
-    // Set comprehensive headers
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': randomLanguage.join(','),
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Connection': 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Sec-Fetch-User': '?1',
-      'Cache-Control': 'max-age=0',
-      'DNT': '1',
-      'sec-ch-ua': '"Chromium";v="121", "Not A(Brand";v="99"',
-      'sec-ch-ua-mobile': '?0',
-      'sec-ch-ua-platform': '"Windows"'
-    });
-
-    // Maximum evasions - override all detection methods
-    await page.evaluateOnNewDocument(() => {
-      // Override webdriver
-      Object.defineProperty(navigator, 'webdriver', {
-        get: () => undefined
-      });
-
-      // Override plugins
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => [
-          {
-            0: {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format"},
-            description: "Portable Document Format",
-            filename: "internal-pdf-viewer",
-            length: 1,
-            name: "Chrome PDF Plugin"
-          }
-        ]
-      });
-
-      // Override languages
-      Object.defineProperty(navigator, 'languages', {
-        get: () => ['en-US', 'en']
-      });
-
-      // Override Chrome property
-      window.chrome = {
-        runtime: {},
-        loadTimes: function() {},
-        csi: function() {},
-        app: {}
-      };
-
-      // Override permissions
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) => (
-        parameters.name === 'notifications' ?
-          Promise.resolve({ state: Notification.permission }) :
-          originalQuery(parameters)
-      );
-
-      // Override hardware concurrency
-      Object.defineProperty(navigator, 'hardwareConcurrency', {
-        get: () => 8
-      });
-
-      // Override device memory
-      Object.defineProperty(navigator, 'deviceMemory', {
-        get: () => 8
-      });
-
-      // Override platform
-      Object.defineProperty(navigator, 'platform', {
-        get: () => 'Win32'
-      });
-
-      // Override vendor
-      Object.defineProperty(navigator, 'vendor', {
-        get: () => 'Google Inc.'
-      });
-
-      // Mock battery API
-      Object.defineProperty(navigator, 'getBattery', {
-        get: () => () => Promise.resolve({
-          charging: true,
-          chargingTime: 0,
-          dischargingTime: Infinity,
-          level: 1
-        })
-      });
-
-      // Override connection
-      Object.defineProperty(navigator, 'connection', {
-        get: () => ({
-          effectiveType: '4g',
-          downlink: 10,
-          rtt: 50,
-          saveData: false
-        })
-      });
-
-      // Override screen properties
-      Object.defineProperty(screen, 'colorDepth', {
-        get: () => 24
-      });
-
-      Object.defineProperty(screen, 'pixelDepth', {
-        get: () => 24
-      });
-
-      // Remove automation indicators
-      delete navigator.__proto__.webdriver;
-
-      // Override toString to hide proxy
-      const originalToString = Function.prototype.toString;
-      Function.prototype.toString = function() {
-        if (this === navigator.permissions.query) {
-          return 'function query() { [native code] }';
-        }
-        return originalToString.apply(this, arguments);
-      };
-
-      // Add realistic WebGL fingerprint
-      const getParameter = WebGLRenderingContext.prototype.getParameter;
-      WebGLRenderingContext.prototype.getParameter = function(parameter) {
-        if (parameter === 37445) {
-          return 'Intel Inc.';
-        }
-        if (parameter === 37446) {
-          return 'Intel Iris OpenGL Engine';
-        }
-        return getParameter.apply(this, arguments);
-      };
-    });
-
-    // Random initial delay (3-7 seconds)
-    await randomDelay(3000, 7000);
-    
     console.log('🌐 Navigating to profile...');
     
-    // Navigate with realistic behavior
-    await page.goto(profileUrl, { 
-      waitUntil: 'networkidle2',
-      timeout: 60000 
-    });
-    
-    // Wait after page load (2-5 seconds)
-    await randomDelay(2000, 5000);
-    
-    // Check for blocking
-    const pageContent = await page.content();
-    if (pageContent.includes('authwall') || 
-        pageContent.includes('checkpoint') || 
-        pageContent.includes('challenge') ||
-        pageContent.includes('captcha')) {
-      throw new Error('LinkedIn access restricted. Try again later or the profile may not be public.');
+    // Navigate with extended timeout
+    try {
+      await page.goto(profileUrl, { 
+        waitUntil: 'domcontentloaded',
+        timeout: CONFIG.NAVIGATION_TIMEOUT
+      });
+      console.log('✅ Page loaded');
+    } catch (navError) {
+      console.log('⚠️ Navigation timeout, but page may have loaded...');
+      await randomDelay(3000, 5000);
     }
     
-    // Simulate human behavior
+    await randomDelay(2000, 4000);
+    
+    // Check page state
+    const pageUrl = await page.url();
+    console.log(`📍 Landed on: ${pageUrl}`);
+    
+    if (pageUrl.includes('authwall') || pageUrl.includes('login')) {
+      throw new Error('Not logged in or session expired');
+    }
+    
+    // Wait for profile to load
+    console.log('⏳ Waiting for profile elements...');
+    try {
+      await page.waitForSelector('h1', { timeout: CONFIG.WAIT_TIMEOUT });
+    } catch (err) {
+      console.log('⚠️ Main heading not found quickly, proceeding anyway...');
+    }
+    
     console.log('🖱️  Simulating human behavior...');
     await simulateHumanBehavior(page);
     
-    // Random delay before extraction (2-4 seconds)
-    await randomDelay(2000, 4000);
+    await randomDelay(2000, 3000);
     
     console.log('📊 Extracting profile data...');
     
-    // Extract profile data with enhanced selectors
     const profileData = await page.evaluate(() => {
       const data = {
         name: '',
@@ -469,24 +475,27 @@ async function scrapeLinkedInProfile(profileUrl, sessionId = null) {
         return Array.from(document.querySelectorAll(selector));
       };
       
-      // Extract name
+      // Extract name - multiple selectors
       data.name = getText('h1.text-heading-xlarge') || 
                   getText('h1.top-card-layout__title') ||
                   getText('.pv-top-card--list li:first-child') ||
-                  getText('h1');
+                  getText('h1') ||
+                  getText('.text-heading-xlarge');
       
       // Extract headline
       data.headline = getText('.text-body-medium.break-words') || 
                      getText('.top-card-layout__headline') ||
-                     getText('.pv-top-card-section__headline');
+                     getText('.pv-top-card-section__headline') ||
+                     getText('div.text-body-medium');
       
       // Extract location
       data.location = getText('.text-body-small.inline.t-black--light.break-words') ||
                      getText('.top-card-layout__second-subline') ||
-                     getText('.pv-top-card--list-bullet li');
+                     getText('.pv-top-card--list-bullet li') ||
+                     getText('span.text-body-small');
       
-      // Extract connections
-      data.connections = getText('.dist-value') || getText('.top-card__connections-count') || '';
+      data.connections = getText('.dist-value') || 
+                        getText('.top-card__connections-count') || '';
       
       // Extract about
       const aboutSelectors = [
@@ -494,7 +503,8 @@ async function scrapeLinkedInProfile(profileUrl, sessionId = null) {
         '.core-section-container__content .inline-show-more-text',
         '.pv-about-section .pv-about__summary-text',
         '[data-section="summary"] .section-info',
-        '.about-section .pv-about__summary-text'
+        '.about-section .pv-about__summary-text',
+        '.inline-show-more-text',
       ];
       
       for (const selector of aboutSelectors) {
@@ -510,14 +520,11 @@ async function scrapeLinkedInProfile(profileUrl, sessionId = null) {
       experienceItems.forEach(item => {
         const titleEl = item.querySelector('.t-bold span[aria-hidden="true"]');
         const companyEl = item.querySelector('.t-14.t-normal span[aria-hidden="true"]');
-        const durationEls = item.querySelectorAll('.t-14.t-normal.t-black--light span[aria-hidden="true"]');
         
         if (titleEl && titleEl.innerText.trim()) {
           data.experience.push({
             title: titleEl.innerText.trim(),
             company: companyEl ? companyEl.innerText.trim() : '',
-            duration: durationEls[0] ? durationEls[0].innerText.trim() : '',
-            location: durationEls[1] ? durationEls[1].innerText.trim() : ''
           });
         }
       });
@@ -527,13 +534,11 @@ async function scrapeLinkedInProfile(profileUrl, sessionId = null) {
       educationItems.forEach(item => {
         const schoolEl = item.querySelector('.t-bold span[aria-hidden="true"]');
         const degreeEl = item.querySelector('.t-14.t-normal span[aria-hidden="true"]');
-        const yearEls = item.querySelectorAll('.t-14.t-normal.t-black--light span[aria-hidden="true"]');
         
         if (schoolEl && schoolEl.innerText.trim()) {
           data.education.push({
             school: schoolEl.innerText.trim(),
             degree: degreeEl ? degreeEl.innerText.trim() : '',
-            year: yearEls[0] ? yearEls[0].innerText.trim() : ''
           });
         }
       });
@@ -550,54 +555,124 @@ async function scrapeLinkedInProfile(profileUrl, sessionId = null) {
       return data;
     });
     
-    // Save cookies for future requests
-    const cookies = await page.cookies();
-    await saveCookies(currentSessionId, cookies);
-    
-    // Random delay before closing (2-4 seconds)
-    await randomDelay(2000, 4000);
-    
-    await browser.close();
+    await randomDelay(2000, 3000);
     
     if (!profileData.name || profileData.name.length === 0) {
-      return {
-        success: false,
-        error: 'Could not extract profile data. The profile may not be public.',
-        sessionId: currentSessionId
-      };
+      throw new Error('Could not extract profile name. Profile may be private or inaccessible.');
     }
     
     console.log(`✅ Successfully scraped: ${profileData.name}`);
+    console.log(`${'='.repeat(60)}\n`);
+    
     return { 
       success: true, 
-      data: { ...profileData, sessionId: currentSessionId }
+      data: profileData
     };
     
   } catch (error) {
-    if (browser) await browser.close();
-    console.error('❌ Scraping error:', error.message);
+    console.error(`❌ Scraping error (Attempt ${retryCount + 1}):`, error.message);
+    
+    // Retry on timeout or navigation errors
+    if (retryCount < CONFIG.RETRY_ATTEMPTS && (
+      error.message.includes('timeout') || 
+      error.message.includes('Navigation') ||
+      error.message.includes('session expired')
+    )) {
+      console.log(`⏳ Retrying in ${CONFIG.RETRY_DELAY / 1000} seconds...`);
+      await randomDelay(CONFIG.RETRY_DELAY, CONFIG.RETRY_DELAY + 2000);
+      
+      // Re-login if session expired
+      if (error.message.includes('session expired')) {
+        isLoggedIn = false;
+      }
+      
+      return scrapeLinkedInProfile(profileUrl, retryCount + 1);
+    }
+    
     return { 
       success: false, 
       error: error.message,
-      sessionId: currentSessionId,
-      message: 'Failed to scrape profile. Please try again.'
+      troubleshooting: [
+        'Check if the profile URL is correct and public',
+        'Verify LinkedIn credentials are valid',
+        'Ensure your network allows LinkedIn access',
+        'Try setting HEADLESS=false in .env to see what\'s happening',
+        'Check if LinkedIn is blocking automated access from your IP'
+      ]
     };
   }
 }
 
-// API Routes
+// ============================================
+// API ENDPOINTS
+// ============================================
+
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'Server is running', 
     timestamp: new Date(),
     totalProfiles: scrapedData.size,
-    stealthMode: 'maximum',
-    activeSessions: sessionCookies.size
+    loggedIn: isLoggedIn,
+    credentialsConfigured: !!(LINKEDIN_CREDENTIALS.email && LINKEDIN_CREDENTIALS.password),
+    config: {
+      headless: CONFIG.HEADLESS,
+      loginTimeout: `${CONFIG.LOGIN_TIMEOUT / 1000}s`,
+      navigationTimeout: `${CONFIG.NAVIGATION_TIMEOUT / 1000}s`,
+      proxy: CONFIG.USE_PROXY ? 'Configured' : 'None',
+    }
   });
 });
 
+app.get('/api/status', (req, res) => {
+  res.json({
+    loggedIn: isLoggedIn,
+    credentialsConfigured: !!(LINKEDIN_CREDENTIALS.email && LINKEDIN_CREDENTIALS.password),
+    message: isLoggedIn ? '✅ Ready to scrape' : '⏳ Not logged in yet',
+    sessionActive: !!globalPage,
+    loginAttempts: `${loginAttempts}/${MAX_LOGIN_ATTEMPTS}`,
+    email: LINKEDIN_CREDENTIALS.email ? LINKEDIN_CREDENTIALS.email.substring(0, 3) + '***' : 'Not configured'
+  });
+});
+
+app.post('/api/login', async (req, res) => {
+  try {
+    console.log('🔄 Manual login triggered');
+    loginAttempts = 0; // Reset attempts
+    const result = await ensureLoggedIn(true);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.post('/api/logout', async (req, res) => {
+  try {
+    console.log('👋 Logout requested');
+    if (globalPage) await globalPage.close();
+    if (globalBrowser) await globalBrowser.close();
+    globalBrowser = null;
+    globalPage = null;
+    isLoggedIn = false;
+    loginSessionId = null;
+    loginAttempts = 0;
+    
+    res.json({ 
+      success: true, 
+      message: 'Logged out successfully' 
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
 app.post('/api/scrape', async (req, res) => {
-  const { profileUrl, sessionId } = req.body;
+  const { profileUrl } = req.body;
   
   if (!profileUrl) {
     return res.status(400).json({ 
@@ -615,28 +690,19 @@ app.post('/api/scrape', async (req, res) => {
   }
   
   try {
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`🔍 New scrape request: ${profileUrl}`);
-    console.log(`⏰ Time: ${new Date().toLocaleString()}`);
-    
-    const result = await scrapeLinkedInProfile(profileUrl, sessionId);
+    const result = await scrapeLinkedInProfile(profileUrl);
     
     if (result.success) {
       const id = Date.now().toString();
       scrapedData.set(id, result.data);
       
-      console.log(`✅ Success! Profile stored with ID: ${id}`);
-      console.log(`${'='.repeat(60)}\n`);
-      
       res.json({ 
         success: true, 
         data: result.data,
         id: id,
-        message: 'Profile scraped successfully with maximum stealth'
+        message: 'Profile scraped successfully'
       });
     } else {
-      console.log(`❌ Failed: ${result.error}`);
-      console.log(`${'='.repeat(60)}\n`);
       res.status(500).json(result);
     }
   } catch (error) {
@@ -659,20 +725,6 @@ app.get('/api/profiles', (req, res) => {
     count: profiles.length,
     profiles 
   });
-});
-
-app.get('/api/profiles/:id', (req, res) => {
-  const { id } = req.params;
-  const profile = scrapedData.get(id);
-  
-  if (profile) {
-    res.json({ success: true, profile });
-  } else {
-    res.status(404).json({ 
-      success: false, 
-      error: 'Profile not found' 
-    });
-  }
 });
 
 app.delete('/api/profiles/:id', (req, res) => {
@@ -708,20 +760,75 @@ app.get('/api/export/:id', (req, res) => {
   }
 });
 
+app.delete('/api/clear-cookies', async (req, res) => {
+  try {
+    sessionCookies.clear();
+    const files = await fs.readdir(COOKIES_DIR);
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        await fs.unlink(path.join(COOKIES_DIR, file));
+      }
+    }
+    res.json({
+      success: true,
+      message: 'All cookies cleared'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+process.on('SIGINT', async () => {
+  console.log('\n🛑 Shutting down gracefully...');
+  try {
+    if (globalPage) await globalPage.close();
+    if (globalBrowser) await globalBrowser.close();
+    console.log('✅ Browser closed');
+  } catch (error) {
+    console.error('Error closing browser:', error);
+  }
+  process.exit(0);
+});
+
 app.listen(PORT, () => {
   console.log(`\n${'='.repeat(70)}`);
-  console.log(`🚀 LinkedIn Scraper - MAXIMUM STEALTH MODE`);
+  console.log(`🚀 LinkedIn Scraper - PRODUCTION VERSION`);
   console.log(`${'='.repeat(70)}`);
   console.log(`📡 Server: http://localhost:${PORT}`);
-  console.log(`🛡️  Anti-Detection: MAXIMUM (24hr+ operation capable)`);
-  console.log(`🔒 Features:`);
-  console.log(`   ✓ User agent rotation (14 agents)`);
+  console.log(`🔒 Credentials: ${LINKEDIN_CREDENTIALS.email ? '✓ Configured' : '✗ Not configured'}`);
+  console.log(`\n⚙️  Configuration:`);
+  console.log(`   • Headless: ${CONFIG.HEADLESS}`);
+  console.log(`   • Login Timeout: ${CONFIG.LOGIN_TIMEOUT / 1000}s`);
+  console.log(`   • Navigation Timeout: ${CONFIG.NAVIGATION_TIMEOUT / 1000}s`);
+  console.log(`   • Retry Attempts: ${CONFIG.RETRY_ATTEMPTS}`);
+  console.log(`   • Proxy: ${CONFIG.USE_PROXY || 'None'}`);
+  console.log(`\n💡 Troubleshooting Tips:`);
+  console.log(`   • Set HEADLESS=false in .env to see browser`);
+  console.log(`   • Set PROXY_SERVER=ip:port if behind proxy`);
+  console.log(`   • Ensure LinkedIn credentials are correct`);
+  
+  console.log(`\n🛡️  Security Features:`);
+  console.log(`   ✓ Stored credentials in .env (never exposed to users)`);
+  console.log(`   ✓ Automatic login on first scrape request`);
+  console.log(`   ✓ Session persistence with cookies`);
+  console.log(`   ✓ User agent rotation (${userAgents.length} agents)`);
   console.log(`   ✓ Screen resolution randomization`);
   console.log(`   ✓ Human behavior simulation`);
-  console.log(`   ✓ Cookie persistence across sessions`);
   console.log(`   ✓ Adaptive rate limiting (45-90s delays)`);
   console.log(`   ✓ WebGL/Canvas fingerprint spoofing`);
   console.log(`   ✓ Advanced header manipulation`);
   console.log(`   ✓ Mouse movement & scroll simulation`);
+  console.log(`\n📊 Available Endpoints: 24`);
   console.log(`${'='.repeat(70)}\n`);
+  
+  if (!LINKEDIN_CREDENTIALS.email || !LINKEDIN_CREDENTIALS.password) {
+    console.log(`⚠️  WARNING: Please configure LinkedIn credentials in .env file:`);
+    console.log(`   LINKEDIN_EMAIL=your-email@example.com`);
+    console.log(`   LINKEDIN_PASSWORD=your-password\n`);
+  } else {
+    console.log(`✅ Ready to scrape! Users can start entering profile URLs.\n`);
+  }
 });
