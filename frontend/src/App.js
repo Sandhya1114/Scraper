@@ -1,223 +1,211 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import React, { useState } from 'react';
 import './App.css';
 
-const API_URL = 'http://localhost:5000/api';
-
-function App() {
-  const [profileUrl, setProfileUrl] = useState('');
+export default function App() {
+  const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
-  const [error, setError] = useState('');
-  const [status, setStatus] = useState(null);
-  const [profiles, setProfiles] = useState([]);
+  const [error, setError] = useState(null);
+  const [useCustomSelectors, setUseCustomSelectors] = useState(false);
+  const [customSelectors, setCustomSelectors] = useState('');
 
-  // Check server status on load
-  useEffect(() => {
-    checkStatus();
-  }, []);
-
-  const checkStatus = async () => {
-    try {
-      const res = await axios.get(`${API_URL}/health`);
-      setStatus(res.data);
-    } catch (err) {
-      setError('Cannot connect to server. Make sure backend is running.');
-    }
+  const defaultSelectors = {
+    name: { type: 'text', query: '.vcard-fullname' },
+    username: { type: 'text', query: '.vcard-username' },
+    bio: { type: 'text', query: '.user-profile-bio' },
+    avatar: { type: 'attr', query: '.avatar-user', attribute: 'src' },
+    followers: { type: 'text', query: 'a[href*="followers"] span' },
+    following: { type: 'text', query: 'a[href*="following"] span' },
+    repositories: { type: 'text', query: 'nav a[data-tab-item="repositories"] span' },
   };
 
   const handleScrape = async () => {
-    if (!profileUrl.trim()) {
-      setError('Please enter a LinkedIn profile URL');
+    if (!url.trim()) {
+      setError('Please enter a valid URL');
       return;
     }
 
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
     try {
-      setLoading(true);
-      setError('');
-      setResult(null);
-      
-      const res = await axios.post(`${API_URL}/scrape`, {
-        profileUrl: profileUrl.trim()
+      const payload = {
+        url: url.trim(),
+      };
+
+      if (useCustomSelectors && customSelectors.trim()) {
+        try {
+          payload.customSelectors = JSON.parse(customSelectors);
+        } catch (e) {
+          setError('Invalid JSON format for custom selectors');
+          setLoading(false);
+          return;
+        }
+      }
+
+      const response = await fetch('http://localhost:3001/api/scrape', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
       });
-      
-      if (res.data.success) {
-        setResult(res.data.data);
-        setProfileUrl(''); // Clear input
-        loadProfiles(); // Refresh profiles list
+
+      const data = await response.json();
+
+      if (data.success) {
+        setResult(data);
       } else {
-        setError(res.data.error || 'Scraping failed');
+        setError(data.error || 'Scraping failed');
       }
     } catch (err) {
-      setError(err.response?.data?.error || 'Scraping failed: ' + err.message);
+      setError('Failed to connect to server. Make sure the backend is running on port 3001');
     } finally {
       setLoading(false);
     }
   };
 
-  const loadProfiles = async () => {
-    try {
-      const res = await axios.get(`${API_URL}/profiles`);
-      if (res.data.success) {
-        setProfiles(res.data.profiles);
-      }
-    } catch (err) {
-      console.error('Failed to load profiles:', err);
-    }
+  const handleQuickFill = () => {
+    setUrl('https://github.com/torvalds');
   };
 
-  const exportProfile = async (id) => {
-    try {
-      const res = await axios.get(`${API_URL}/export/${id}`, {
-        responseType: 'blob'
-      });
-      
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `profile-${id}.json`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    } catch (err) {
-      setError('Export failed');
+  const renderValue = (value) => {
+    if (typeof value === 'string' && value.startsWith('http')) {
+      return (
+        <a href={value} target="_blank" rel="noopener noreferrer" className="link">
+          {value}
+        </a>
+      );
     }
-  };
-
-  const deleteProfile = async (id) => {
-    try {
-      await axios.delete(`${API_URL}/profiles/${id}`);
-      loadProfiles();
-    } catch (err) {
-      setError('Delete failed');
+    if (Array.isArray(value)) {
+      return (
+        <ul className="array-list">
+          {value.map((item, i) => (
+            <li key={i}>{item}</li>
+          ))}
+        </ul>
+      );
     }
+    return value || 'N/A';
   };
 
   return (
     <div className="container">
-      <h1>🔍 LinkedIn Profile Scraper</h1>
-      
-      {status && (
-        <div className="card status-card">
-          <p>
-            <strong>Status:</strong> {status.loggedIn ? '✅ Ready' : '⏳ Initializing...'}
-          </p>
-          <p>
-            <strong>Credentials:</strong> {status.credentialsConfigured ? '✓ Configured' : '✗ Not configured'}
-          </p>
-          <p><small>Total Profiles Scraped: {status.totalProfiles}</small></p>
-        </div>
-      )}
-
-      <div className="card">
-        <h2>Scrape LinkedIn Profile</h2>
-        <p>Enter a LinkedIn profile URL to extract information</p>
-        
-        <div className="input-group">
-          <input
-            type="text"
-            value={profileUrl}
-            onChange={(e) => setProfileUrl(e.target.value)}
-            placeholder="https://www.linkedin.com/in/username"
-            className="input"
-            disabled={loading}
-          />
-          <button 
-            onClick={handleScrape} 
-            disabled={loading || !status?.credentialsConfigured}
-            className="btn-primary"
-          >
-            {loading ? '⏳ Scraping...' : '🔍 Scrape Profile'}
-          </button>
-        </div>
-        
-        {!status?.credentialsConfigured && (
-          <p className="warning">⚠️ LinkedIn credentials not configured. Check backend .env file.</p>
-        )}
+      <div className="header">
+        <h1>🔍 Generic Web Scraper</h1>
+        <p className="subtitle">Extract data from any GitHub profile or custom website</p>
       </div>
 
-      {error && <div className="error">{error}</div>}
+      <div className="input-section">
+        <div className="input-group">
+          <label htmlFor="url">Profile URL</label>
+          <div className="input-with-button">
+            <input
+              id="url"
+              type="text"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://github.com/username"
+              className="input"
+              onKeyPress={(e) => e.key === 'Enter' && handleScrape()}
+            />
+            <button onClick={handleQuickFill} className="btn-secondary">
+              Quick Fill
+            </button>
+          </div>
+        </div>
 
-      {result && (
-        <div className="card result">
-          <h2>✅ {result.name}</h2>
-          <p><strong>Headline:</strong> {result.headline}</p>
-          <p><strong>Location:</strong> {result.location}</p>
-          <p><strong>Connections:</strong> {result.connections}</p>
-          
-          {result.about && (
-            <>
-              <h3>About</h3>
-              <p>{result.about}</p>
-            </>
-          )}
-          
-          {result.experience && result.experience.length > 0 && (
-            <>
-              <h3>Experience</h3>
-              <ul>
-                {result.experience.map((exp, i) => (
-                  <li key={i}>
-                    <strong>{exp.title}</strong> at {exp.company}
-                    {exp.duration && <><br/><small>{exp.duration}</small></>}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          
-          {result.education && result.education.length > 0 && (
-            <>
-              <h3>Education</h3>
-              <ul>
-                {result.education.map((edu, i) => (
-                  <li key={i}>
-                    <strong>{edu.school}</strong>
-                    {edu.degree && <><br/>{edu.degree}</>}
-                    {edu.year && <><br/><small>{edu.year}</small></>}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          
-          {result.skills && result.skills.length > 0 && (
-            <>
-              <h3>Skills</h3>
-              <div className="skills">
-                {result.skills.map((skill, i) => (
-                  <span key={i} className="skill-tag">{skill}</span>
-                ))}
-              </div>
-            </>
-          )}
-          
-          <p><small>Scraped at: {new Date(result.scrapedAt).toLocaleString()}</small></p>
+        <div className="checkbox-group">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={useCustomSelectors}
+              onChange={(e) => setUseCustomSelectors(e.target.checked)}
+            />
+            <span>Use Custom Selectors (Advanced)</span>
+          </label>
+        </div>
+
+        {useCustomSelectors && (
+          <div className="input-group">
+            <label htmlFor="selectors">Custom Selectors (JSON)</label>
+            <textarea
+              id="selectors"
+              value={customSelectors}
+              onChange={(e) => setCustomSelectors(e.target.value)}
+              placeholder={JSON.stringify(defaultSelectors, null, 2)}
+              className="textarea"
+              rows="8"
+            />
+            <p className="hint">
+              Format: {`{ "key": { "type": "text|attr|array|count", "query": "css-selector" } }`}
+            </p>
+          </div>
+        )}
+
+        <button
+          onClick={handleScrape}
+          disabled={loading}
+          className={`btn-primary ${loading ? 'loading' : ''}`}
+        >
+          {loading ? 'Scraping...' : '🚀 Scrape Data'}
+        </button>
+      </div>
+
+      {error && (
+        <div className="error-box">
+          <strong>⚠️ Error:</strong> {error}
         </div>
       )}
 
-      {profiles.length > 0 && (
-        <div className="card">
-          <h2>📚 Scraped Profiles ({profiles.length})</h2>
-          <div className="profiles-list">
-            {profiles.map(profile => (
-              <div key={profile.id} className="profile-item">
-                <div>
-                  <strong>{profile.name}</strong>
-                  <br/>
-                  <small>{profile.headline}</small>
-                </div>
-                <div className="profile-actions">
-                  <button onClick={() => exportProfile(profile.id)} className="btn-small">📥 Export</button>
-                  <button onClick={() => deleteProfile(profile.id)} className="btn-small btn-danger">🗑️ Delete</button>
+      {result && (
+        <div className="result-section">
+          <div className="result-header">
+            <h2>📊 Scraped Data</h2>
+            <span className="timestamp">
+              {new Date(result.timestamp).toLocaleString()}
+            </span>
+          </div>
+
+          <div className="result-url">
+            <strong>Source:</strong>{' '}
+            <a href={result.url} target="_blank" rel="noopener noreferrer">
+              {result.url}
+            </a>
+          </div>
+
+          <div className="data-grid">
+            {Object.entries(result.data).map(([key, value]) => (
+              <div key={key} className="data-item">
+                <div className="data-key">{key}</div>
+                <div className="data-value">
+                  {key === 'avatar' && value ? (
+                    <img src={value} alt="Avatar" className="avatar" />
+                  ) : (
+                    renderValue(value)
+                  )}
                 </div>
               </div>
             ))}
           </div>
+
+          <div className="json-section">
+            <h3>Raw JSON</h3>
+            <pre className="json-output">{JSON.stringify(result.data, null, 2)}</pre>
+          </div>
         </div>
       )}
+
+      <div className="info-section">
+        <h3>ℹ️ How to Use</h3>
+        <ol>
+          <li>Enter a GitHub profile URL (e.g., https://github.com/username)</li>
+          <li>Click "Scrape Data" to extract profile information</li>
+          <li>Optionally, enable "Custom Selectors" to scrape any website with your own CSS selectors</li>
+          <li>Selector types: <code>text</code>, <code>attr</code>, <code>array</code>, <code>count</code></li>
+        </ol>
+      </div>
     </div>
   );
 }
-
-export default App;
