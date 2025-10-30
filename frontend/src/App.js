@@ -1,25 +1,19 @@
+// App.jsx
 import React, { useState } from 'react';
+import { Search, Loader2, AlertCircle, Download, ExternalLink, Globe, Database } from 'lucide-react';
 import './App.css';
 
-export default function App() {
+const App = () => {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  const [useCustomSelectors, setUseCustomSelectors] = useState(false);
-  const [customSelectors, setCustomSelectors] = useState('');
 
-  const defaultSelectors = {
-    name: { type: 'text', query: '.vcard-fullname' },
-    username: { type: 'text', query: '.vcard-username' },
-    bio: { type: 'text', query: '.user-profile-bio' },
-    avatar: { type: 'attr', query: '.avatar-user', attribute: 'src' },
-    followers: { type: 'text', query: 'a[href*="followers"] span' },
-    following: { type: 'text', query: 'a[href*="following"] span' },
-    repositories: { type: 'text', query: 'nav a[data-tab-item="repositories"] span' },
-  };
+  const API_URL = 'http://localhost:3001/api/scrape';
 
-  const handleScrape = async () => {
+  const handleScrape = async (e) => {
+    e.preventDefault();
+    
     if (!url.trim()) {
       setError('Please enter a valid URL');
       return;
@@ -30,182 +24,197 @@ export default function App() {
     setResult(null);
 
     try {
-      const payload = {
-        url: url.trim(),
-      };
-
-      if (useCustomSelectors && customSelectors.trim()) {
-        try {
-          payload.customSelectors = JSON.parse(customSelectors);
-        } catch (e) {
-          setError('Invalid JSON format for custom selectors');
-          setLoading(false);
-          return;
-        }
-      }
-
-      const response = await fetch('http://localhost:3001/api/scrape', {
+      const response = await fetch(API_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
       });
 
+      if (!response.ok) throw new Error('Scraping failed');
+      
       const data = await response.json();
-
-      if (data.success) {
-        setResult(data);
-      } else {
-        setError(data.error || 'Scraping failed');
-      }
+      setResult(data);
     } catch (err) {
-      setError('Failed to connect to server. Make sure the backend is running on port 3001');
+      setError(err.message || 'Failed to scrape. Make sure the backend is running on port 3001.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleQuickFill = () => {
-    setUrl('https://github.com/torvalds');
+  const downloadJson = () => {
+    if (result) {
+      const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `scrape_${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
   };
 
-  const renderValue = (value) => {
-    if (typeof value === 'string' && value.startsWith('http')) {
-      return (
-        <a href={value} target="_blank" rel="noopener noreferrer" className="link">
-          {value}
-        </a>
-      );
-    }
-    if (Array.isArray(value)) {
-      return (
-        <ul className="array-list">
-          {value.map((item, i) => (
-            <li key={i}>{item}</li>
-          ))}
-        </ul>
-      );
-    }
-    return value || 'N/A';
+  const ItemCard = ({ item }) => {
+    return (
+      <div className="item-card">
+        {item.image && (
+          <div className="item-image">
+            <img 
+              src={item.image} 
+              alt={item.name || 'Item'} 
+              onError={(e) => e.target.style.display = 'none'}
+            />
+          </div>
+        )}
+        <div className="item-content">
+          {item.name && <h3 className="item-name">{item.name}</h3>}
+          {item.price && <div className="item-price">{item.price}</div>}
+          {item.description && (
+            <p className="item-description">
+              {item.description.substring(0, 150)}
+              {item.description.length > 150 ? '...' : ''}
+            </p>
+          )}
+          {item.metadata && Object.keys(item.metadata).length > 0 && (
+            <div className="item-metadata">
+              {Object.entries(item.metadata).slice(0, 3).map(([key, val]) => (
+                <span key={key} className="meta-tag">{key}: {val}</span>
+              ))}
+            </div>
+          )}
+          {item.link && (
+            <a href={item.link} target="_blank" rel="noopener noreferrer" className="item-link">
+              View Details
+              <ExternalLink size={14} />
+            </a>
+          )}
+          <div className="confidence-bar">
+            <div 
+              className="confidence-fill" 
+              style={{ width: `${(item.confidence || 0) * 100}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
-    <div className="container">
-      <div className="header">
-        <h1>🔍 Generic Web Scraper</h1>
-        <p className="subtitle">Extract data from any GitHub profile or custom website</p>
-      </div>
+    <div className="app-container">
+      <div className="container">
+        {/* Header */}
+        <header className="header">
+          <div className="header-content">
+            <Globe className="header-icon" />
+            <h1>Universal Web Scraper</h1>
+          </div>
+          <p className="header-subtitle">
+            Extract structured data from ANY website - Amazon, Flipkart, Zomato, GitHub, Real Estate, and more
+          </p>
+        </header>
 
-      <div className="input-section">
-        <div className="input-group">
-          <label htmlFor="url">Profile URL</label>
-          <div className="input-with-button">
+        {/* Input Form */}
+        <div className="search-card">
+          <form onSubmit={handleScrape} className="search-form">
             <input
-              id="url"
-              type="text"
+              type="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://github.com/username"
-              className="input"
-              onKeyPress={(e) => e.key === 'Enter' && handleScrape()}
+              placeholder="Paste any URL here (e.g., Amazon product, restaurant menu, GitHub repo...)"
+              className="url-input"
+              disabled={loading}
+              required
             />
-            <button onClick={handleQuickFill} className="btn-secondary">
-              Quick Fill
+            <button type="submit" className="scrape-btn" disabled={loading}>
+              {loading ? (
+                <>
+                  <Loader2 className="btn-icon spin" />
+                  <span>Scraping...</span>
+                </>
+              ) : (
+                <>
+                  <Search className="btn-icon" />
+                  <span>Scrape</span>
+                </>
+              )}
             </button>
+          </form>
+
+          <div className="supported-sites">
+            <p className="supported-label">Works with:</p>
+            <div className="tags">
+              {['E-commerce (Amazon, Flipkart)', 'Food (Zomato, Swiggy)', 'Real Estate', 'GitHub', 'News Sites', 'Blogs', 'Any Website'].map((tag) => (
+                <span key={tag} className="tag">{tag}</span>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="checkbox-group">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={useCustomSelectors}
-              onChange={(e) => setUseCustomSelectors(e.target.checked)}
-            />
-            <span>Use Custom Selectors (Advanced)</span>
-          </label>
-        </div>
-
-        {useCustomSelectors && (
-          <div className="input-group">
-            <label htmlFor="selectors">Custom Selectors (JSON)</label>
-            <textarea
-              id="selectors"
-              value={customSelectors}
-              onChange={(e) => setCustomSelectors(e.target.value)}
-              placeholder={JSON.stringify(defaultSelectors, null, 2)}
-              className="textarea"
-              rows="8"
-            />
-            <p className="hint">
-              Format: {`{ "key": { "type": "text|attr|array|count", "query": "css-selector" } }`}
-            </p>
+        {/* Loading */}
+        {loading && (
+          <div className="loading">
+            <div className="spinner" />
+            <p>Scraping website... This may take a few seconds</p>
           </div>
         )}
 
-        <button
-          onClick={handleScrape}
-          disabled={loading}
-          className={`btn-primary ${loading ? 'loading' : ''}`}
-        >
-          {loading ? 'Scraping...' : '🚀 Scrape Data'}
-        </button>
-      </div>
-
-      {error && (
-        <div className="error-box">
-          <strong>⚠️ Error:</strong> {error}
-        </div>
-      )}
-
-      {result && (
-        <div className="result-section">
-          <div className="result-header">
-            <h2>📊 Scraped Data</h2>
-            <span className="timestamp">
-              {new Date(result.timestamp).toLocaleString()}
-            </span>
+        {/* Error */}
+        {error && (
+          <div className="error-card">
+            <AlertCircle className="error-icon" />
+            <div>
+              <h3>Error</h3>
+              <p>{error}</p>
+            </div>
           </div>
+        )}
 
-          <div className="result-url">
-            <strong>Source:</strong>{' '}
-            <a href={result.url} target="_blank" rel="noopener noreferrer">
-              {result.url}
-            </a>
-          </div>
-
-          <div className="data-grid">
-            {Object.entries(result.data).map(([key, value]) => (
-              <div key={key} className="data-item">
-                <div className="data-key">{key}</div>
-                <div className="data-value">
-                  {key === 'avatar' && value ? (
-                    <img src={value} alt="Avatar" className="avatar" />
-                  ) : (
-                    renderValue(value)
-                  )}
+        {/* Results */}
+        {result && (
+          <div className="results">
+            {/* Metadata */}
+            <div className="metadata-card">
+              <div className="metadata-header">
+                <div>
+                  <h2>Scrape Results</h2>
+                  <div className="metadata-info">
+                    <span>
+                      <Database size={16} />
+                      {result.summary.totalItems} items found
+                    </span>
+                    <span>Type: <strong>{result.metadata.pageType}</strong></span>
+                    <span>Method: <strong>{result.metadata.method}</strong></span>
+                    <span>Confidence: <strong>{(result.summary.avgConfidence * 100).toFixed(0)}%</strong></span>
+                  </div>
                 </div>
+                <button onClick={downloadJson} className="download-btn">
+                  <Download size={18} />
+                  Download JSON
+                </button>
               </div>
-            ))}
-          </div>
 
-          <div className="json-section">
-            <h3>Raw JSON</h3>
-            <pre className="json-output">{JSON.stringify(result.data, null, 2)}</pre>
-          </div>
-        </div>
-      )}
+              {result.summary.warnings && result.summary.warnings.length > 0 && (
+                <div className="warnings">
+                  <p>⚠️ Warnings:</p>
+                  <ul>
+                    {result.summary.warnings.map((warning, i) => (
+                      <li key={i}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
 
-      <div className="info-section">
-        <h3>ℹ️ How to Use</h3>
-        <ol>
-          <li>Enter a GitHub profile URL (e.g., https://github.com/username)</li>
-          <li>Click "Scrape Data" to extract profile information</li>
-          <li>Optionally, enable "Custom Selectors" to scrape any website with your own CSS selectors</li>
-          <li>Selector types: <code>text</code>, <code>attr</code>, <code>array</code>, <code>count</code></li>
-        </ol>
+            {/* Items Grid */}
+            <div className="items-grid">
+              {result.items.slice(0, 100).map((item, index) => (
+                <ItemCard key={item.id || index} item={item} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
-}
+};
+
+export default App;
