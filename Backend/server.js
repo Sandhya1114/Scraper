@@ -4,30 +4,31 @@
 const express = require('express');
 const cheerio = require('cheerio');
 const playwright = require('playwright');
-const axios = require('axios');
 const cors = require('cors');
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// UNIVERSAL SCRAPER - TRULY GENERIC APPROACH
+// ADVANCED UNIVERSAL SCRAPER - NO DUPLICATES, MAXIMUM ACCURACY
 class UniversalScraper {
   constructor(url) {
     this.url = url;
     this.domain = new URL(url).hostname;
+    this.seenContent = new Set(); // Track unique content
     this.results = {
       success: false,
       metadata: {
         url: url,
         pageType: 'unknown',
         scrapedAt: new Date().toISOString(),
-        method: 'playwright', // Always use Playwright for reliability
+        method: 'playwright',
         domain: this.domain
       },
       items: [],
       summary: {
         totalItems: 0,
+        duplicatesRemoved: 0,
         avgConfidence: 0,
         warnings: []
       }
@@ -36,7 +37,6 @@ class UniversalScraper {
 
   async scrape() {
     try {
-      // Always use Playwright for modern sites
       return await this.scrapeWithPlaywright();
     } catch (error) {
       this.results.summary.warnings.push(error.message);
@@ -46,7 +46,7 @@ class UniversalScraper {
 
   async scrapeWithPlaywright() {
     const browser = await playwright.chromium.launch({ 
-      headless: true,
+      headless: false,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
     });
     
@@ -62,49 +62,52 @@ class UniversalScraper {
       console.log(`🌐 Navigating to: ${this.url}`);
       
       await page.goto(this.url, { 
-        waitUntil: 'domcontentloaded',
-        timeout: 45000 
+        waitUntil: 'networkidle',
+        timeout: 60000 
       });
       
-      // Wait for page to settle
-      await page.waitForTimeout(4000);
+      // Wait for dynamic content
+      await page.waitForTimeout(3000);
       
-      // Intelligent scrolling - scroll multiple times to trigger lazy loading
-      console.log('📜 Scrolling to load content...');
-      for (let i = 0; i < 8; i++) {
-        await page.evaluate(() => {
-          window.scrollBy(0, window.innerHeight);
-        });
-        await page.waitForTimeout(800);
+      // Intelligent scrolling with pauses
+      console.log('📜 Loading dynamic content...');
+      for (let i = 0; i < 10; i++) {
+        await page.evaluate(() => window.scrollBy(0, window.innerHeight * 0.8));
+        await page.waitForTimeout(600);
       }
       
       // Scroll back to top
       await page.evaluate(() => window.scrollTo(0, 0));
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1500);
 
-      // Get the fully rendered HTML
       const html = await page.content();
       const $ = cheerio.load(html);
       
       console.log('🔍 Analyzing page structure...');
       
-      // STEP 1: Detect page type using advanced heuristics
-      const analysis = this.analyzePage($);
+      // Remove noise elements
+      this.removeNoise($);
+      
+      // Advanced page analysis
+      const analysis = this.analyzePageAdvanced($);
       this.results.metadata.pageType = analysis.type;
       
       console.log(`📊 Detected: ${analysis.type} page with ${analysis.candidates.length} potential items`);
       
-      // STEP 2: Extract based on page type
+      // Extract based on page type
       if (analysis.type === 'listing') {
         await this.extractListingAdvanced($, analysis);
       } else {
         await this.extractSingleAdvanced($);
       }
 
+      // Remove duplicates
+      this.removeDuplicates();
+
       this.results.success = this.results.items.length > 0;
       this.calculateSummary();
       
-      console.log(`✅ Extracted ${this.results.items.length} items`);
+      console.log(`✅ Extracted ${this.results.items.length} unique items (${this.results.summary.duplicatesRemoved} duplicates removed)`);
 
     } catch (error) {
       console.error('❌ Error:', error.message);
@@ -116,119 +119,117 @@ class UniversalScraper {
     return this.results;
   }
 
-  // ADVANCED PAGE ANALYSIS
-  analyzePage($) {
-    const analysis = {
-      type: 'single',
-      candidates: [],
-      patterns: []
-    };
+  // Remove noise elements that interfere with scraping
+  removeNoise($) {
+    const noiseSelectors = [
+      'script', 'style', 'noscript', 'iframe',
+      'nav', 'header:not([role="banner"])', 'footer',
+      '[class*="cookie"]', '[class*="banner"]', '[class*="popup"]',
+      '[class*="modal"]', '[class*="overlay"]', '[class*="advertisement"]',
+      '[class*="sidebar"]', '[class*="menu"]', '[id*="menu"]',
+      '[class*="navigation"]', '[class*="breadcrumb"]'
+    ];
+    
+    noiseSelectors.forEach(sel => $(sel).remove());
+  }
 
-    // Find ALL elements with class or id attributes
-    const allElements = $('[class], [id]');
+  // ADVANCED PAGE ANALYSIS WITH MULTIPLE STRATEGIES
+  analyzePageAdvanced($) {
+    const strategies = [
+      () => this.findByRepeatingPatterns($),
+      () => this.findBySemanticStructure($),
+      () => this.findByCommonContainers($),
+      () => this.findByDataAttributes($)
+    ];
+
+    let bestAnalysis = { type: 'single', candidates: [], score: 0 };
+
+    for (const strategy of strategies) {
+      const result = strategy();
+      if (result.score > bestAnalysis.score && result.candidates.length >= 2) {
+        bestAnalysis = result;
+      }
+    }
+
+    if (bestAnalysis.candidates.length >= 2) {
+      bestAnalysis.type = 'listing';
+    }
+
+    return bestAnalysis;
+  }
+
+  // Strategy 1: Find repeating class/tag patterns
+  findByRepeatingPatterns($) {
     const elementGroups = new Map();
-
-    // Group elements by their tag + class pattern
-    allElements.each((_, el) => {
+    
+    // Find all potential item containers
+    const potentialItems = $('article, [class*="item"], [class*="card"], [class*="product"], [class*="listing"], [class*="result"], [data-testid], [data-item]');
+    
+    potentialItems.each((_, el) => {
       const $el = $(el);
-      const tag = el.name;
-      const classes = ($el.attr('class') || '').split(/\s+/).filter(c => c.length > 0);
+      const signature = this.createElementSignature($, el);
       
-      // Skip if too generic or too small
-      const text = $el.text().trim();
-      if (text.length < 5) return;
-      
-      // Create signature for this element type
-      classes.forEach(cls => {
-        const signature = `${tag}.${cls}`;
-        
-        if (!elementGroups.has(signature)) {
-          elementGroups.set(signature, []);
-        }
-        elementGroups.get(signature).push(el);
-      });
+      if (!elementGroups.has(signature)) {
+        elementGroups.set(signature, []);
+      }
+      elementGroups.get(signature).push(el);
     });
 
-    // Find groups with 2+ similar elements
-    let bestGroup = null;
-    let maxCount = 0;
-    let maxScore = 0;
+    let bestGroup = [];
+    let bestScore = 0;
 
-    for (const [signature, elements] of elementGroups) {
+    for (const [sig, elements] of elementGroups) {
       if (elements.length >= 2) {
-        // Score this group based on richness of content
         const score = this.scoreElementGroup($, elements);
-        
-        if (score > maxScore && elements.length >= maxCount * 0.8) {
-          maxScore = score;
-          maxCount = elements.length;
-          bestGroup = elements;
-        } else if (elements.length > maxCount && score >= maxScore * 0.8) {
-          maxScore = score;
-          maxCount = elements.length;
+        if (score > bestScore || (score >= bestScore * 0.9 && elements.length > bestGroup.length)) {
+          bestScore = score;
           bestGroup = elements;
         }
       }
     }
 
-    // Also check for common parent patterns
-    const parentGroups = this.findParentGroups($);
-    if (parentGroups.elements.length > maxCount && parentGroups.score > maxScore) {
-      bestGroup = parentGroups.elements;
-      maxCount = parentGroups.elements.length;
-      maxScore = parentGroups.score;
-    }
-
-    if (maxCount >= 2) {
-      analysis.type = 'listing';
-      analysis.candidates = bestGroup;
-      analysis.score = maxScore;
-    }
-
-    return analysis;
+    return { candidates: bestGroup, score: bestScore, type: bestGroup.length >= 2 ? 'listing' : 'single' };
   }
 
-  // Score element group by content richness
-  scoreElementGroup($, elements) {
-    let score = 0;
-    const sample = elements.slice(0, 5);
-    
-    sample.forEach(el => {
-      const $el = $(el);
-      
-      // Check for rich content indicators
-      if ($el.find('img').length > 0) score += 20;
-      if ($el.find('a').length > 0) score += 15;
-      if ($el.find('h1, h2, h3, h4').length > 0) score += 25;
-      if ($el.find('[class*="price"], [class*="cost"]').length > 0) score += 30;
-      if ($el.find('[class*="title"], [class*="name"]').length > 0) score += 20;
-      
-      const text = $el.text().trim();
-      if (text.length > 20) score += 10;
-      if (text.length > 50) score += 10;
-      
-      // Check for common data attributes
-      if ($el.attr('data-id') || $el.attr('data-item-id')) score += 15;
-    });
-    
-    return score / sample.length;
-  }
+  // Strategy 2: Semantic HTML structure
+  findBySemanticStructure($) {
+    const semanticSelectors = [
+      'article', '[itemtype]', '[itemscope]',
+      'li[class*="item"]', 'li[class*="product"]', 'li[class*="card"]',
+      'div[class*="item"]', 'div[class*="product"]', 'div[class*="card"]',
+      '[role="article"]', '[role="listitem"]'
+    ];
 
-  // Find groups by analyzing parent-child patterns
-  findParentGroups($) {
     let bestElements = [];
     let bestScore = 0;
 
-    // Look for parents with multiple similar children
+    for (const selector of semanticSelectors) {
+      const elements = $(selector).toArray();
+      if (elements.length >= 2) {
+        const score = this.scoreElementGroup($, elements);
+        if (score > bestScore) {
+          bestScore = score;
+          bestElements = elements;
+        }
+      }
+    }
+
+    return { candidates: bestElements, score: bestScore };
+  }
+
+  // Strategy 3: Common container patterns
+  findByCommonContainers($) {
+    let bestElements = [];
+    let bestScore = 0;
+
     $('body *').each((_, parent) => {
       const $parent = $(parent);
       const children = $parent.children();
       
       if (children.length >= 2 && children.length <= 500) {
-        // Check if children are similar
         const similarity = this.checkChildrenSimilarity($, children);
         
-        if (similarity > 0.5) {
+        if (similarity > 0.6) {
           const score = this.scoreElementGroup($, children.toArray());
           
           if (score > bestScore && children.length >= 2) {
@@ -239,38 +240,120 @@ class UniversalScraper {
       }
     });
 
-    return { elements: bestElements, score: bestScore };
+    return { candidates: bestElements, score: bestScore };
   }
 
-  // Check similarity between sibling elements
+  // Strategy 4: Data attributes
+  findByDataAttributes($) {
+    const dataSelectors = [
+      '[data-product-id]', '[data-item-id]', '[data-id]',
+      '[data-component-type="product"]', '[data-component-type="item"]',
+      '[data-test*="item"]', '[data-test*="product"]', '[data-test*="card"]'
+    ];
+
+    let bestElements = [];
+    let bestScore = 0;
+
+    for (const selector of dataSelectors) {
+      const elements = $(selector).toArray();
+      if (elements.length >= 2) {
+        const score = this.scoreElementGroup($, elements);
+        if (score > bestScore) {
+          bestScore = score;
+          bestElements = elements;
+        }
+      }
+    }
+
+    return { candidates: bestElements, score: bestScore };
+  }
+
+  // Create unique signature for element
+  createElementSignature($, el) {
+    const $el = $(el);
+    const tag = el.name;
+    const classes = ($el.attr('class') || '').split(/\s+/).filter(c => 
+      c.length > 2 && !c.match(/^(active|selected|hidden|visible|\d+)$/i)
+    );
+    
+    return `${tag}:${classes.sort().slice(0, 3).join('.')}`;
+  }
+
+  // Score element group
+  scoreElementGroup($, elements) {
+    if (elements.length === 0) return 0;
+    
+    let totalScore = 0;
+    const sample = elements.slice(0, Math.min(5, elements.length));
+    
+    sample.forEach(el => {
+      const $el = $(el);
+      let score = 0;
+      
+      // Rich content indicators
+      if ($el.find('img, picture').length > 0) score += 25;
+      if ($el.find('a[href]').length > 0) score += 20;
+      if ($el.find('h1, h2, h3, h4, h5, h6').length > 0) score += 30;
+      
+      // Price indicators
+      const priceSelectors = '[class*="price"], [class*="cost"], [class*="amount"], [itemprop="price"]';
+      if ($el.find(priceSelectors).length > 0) score += 35;
+      
+      // Title indicators
+      const titleSelectors = '[class*="title"], [class*="name"], [class*="heading"]';
+      if ($el.find(titleSelectors).length > 0) score += 25;
+      
+      // Description
+      if ($el.find('p, [class*="desc"], [class*="detail"]').length > 0) score += 15;
+      
+      // Text content
+      const text = $el.text().trim();
+      if (text.length > 30) score += 15;
+      if (text.length > 100) score += 15;
+      
+      // Data attributes
+      if ($el.attr('data-id') || $el.attr('data-item-id') || $el.attr('data-product-id')) score += 20;
+      
+      // Structured data
+      if ($el.attr('itemscope') || $el.attr('itemtype')) score += 25;
+      
+      totalScore += score;
+    });
+    
+    return totalScore / sample.length;
+  }
+
+  // Check children similarity
   checkChildrenSimilarity($, children) {
     if (children.length < 2) return 0;
     
     const first = $(children[0]);
     const structure = {
       tagName: children[0].name,
-      hasImg: first.find('img').length > 0,
-      hasLink: first.find('a').length > 0,
+      hasImg: first.find('img, picture').length > 0,
+      hasLink: first.find('a[href]').length > 0,
       hasHeading: first.find('h1, h2, h3, h4, h5, h6').length > 0,
+      hasPrice: first.find('[class*="price"], [class*="cost"]').length > 0,
       childCount: first.children().length,
       textLength: first.text().trim().length
     };
 
     let similarCount = 0;
-    const sample = children.slice(1, Math.min(children.length, 10));
+    const sample = children.slice(1, Math.min(children.length, 15));
     
     sample.each((_, child) => {
       const $child = $(child);
       const matches = [
         child.name === structure.tagName,
-        ($child.find('img').length > 0) === structure.hasImg,
-        ($child.find('a').length > 0) === structure.hasLink,
-        Math.abs($child.children().length - structure.childCount) <= 3,
-        Math.abs($child.text().trim().length - structure.textLength) < structure.textLength * 0.5
+        ($child.find('img, picture').length > 0) === structure.hasImg,
+        ($child.find('a[href]').length > 0) === structure.hasLink,
+        ($child.find('h1, h2, h3, h4, h5, h6').length > 0) === structure.hasHeading,
+        Math.abs($child.children().length - structure.childCount) <= 4,
+        Math.abs($child.text().trim().length - structure.textLength) < structure.textLength * 0.6
       ];
       
       const matchCount = matches.filter(m => m).length;
-      if (matchCount >= 3) similarCount++;
+      if (matchCount >= 4) similarCount++;
     });
 
     return similarCount / sample.length;
@@ -278,28 +361,23 @@ class UniversalScraper {
 
   // ADVANCED LISTING EXTRACTION
   async extractListingAdvanced($, analysis) {
-    const items = [];
     const candidates = analysis.candidates || [];
-
     console.log(`🔄 Processing ${candidates.length} candidate items...`);
 
     candidates.forEach((el, i) => {
-      if (i >= 200) return; // Limit to 200 items
+      if (i >= 300) return; // Limit
       
       const $el = $(el);
       const item = this.extractUniversalData($, $el);
       
-      // Accept item if it has ANY meaningful data
-      if (this.isValidItem(item)) {
+      if (this.isValidItem(item) && !this.isDuplicate(item)) {
         item.id = `item_${i + 1}`;
-        items.push(item);
+        this.results.items.push(item);
       }
     });
-
-    this.results.items = items;
   }
 
-  // ADVANCED SINGLE PAGE EXTRACTION
+  // SINGLE PAGE EXTRACTION
   async extractSingleAdvanced($) {
     const item = this.extractUniversalData($, $('body'));
     
@@ -309,7 +387,7 @@ class UniversalScraper {
     }
   }
 
-  // UNIVERSAL DATA EXTRACTION - Works for ANY content type
+  // UNIVERSAL DATA EXTRACTION - ENHANCED
   extractUniversalData($, container) {
     const item = {
       name: null,
@@ -321,109 +399,140 @@ class UniversalScraper {
       confidence: 0
     };
 
-    // 1. EXTRACT NAME/TITLE using multiple strategies
-    item.name = this.extractTitle($, container);
+    // Extract with multiple strategies
+    item.name = this.extractTitleAdvanced($, container);
     if (item.name) item.confidence += 0.25;
 
-    // 2. EXTRACT PRICE (if exists)
-    item.price = this.extractPrice($, container);
+    item.price = this.extractPriceAdvanced($, container);
     if (item.price) item.confidence += 0.2;
 
-    // 3. EXTRACT IMAGE
-    item.image = this.extractImage($, container);
+    item.image = this.extractImageAdvanced($, container);
     if (item.image) item.confidence += 0.15;
 
-    // 4. EXTRACT LINK
-    item.link = this.extractLink($, container);
+    item.link = this.extractLinkAdvanced($, container);
     if (item.link) item.confidence += 0.1;
 
-    // 5. EXTRACT DESCRIPTION
-    item.description = this.extractDescription($, container);
+    item.description = this.extractDescriptionAdvanced($, container);
     if (item.description) item.confidence += 0.15;
 
-    // 6. EXTRACT METADATA (ratings, stats, etc.)
-    item.metadata = this.extractMetadata($, container);
+    item.metadata = this.extractMetadataAdvanced($, container);
     if (Object.keys(item.metadata).length > 0) item.confidence += 0.15;
 
     return item;
   }
 
-  // Extract title with multiple fallback strategies
-  extractTitle($, container) {
-    // Strategy 1: Semantic headings
-    const headings = container.find('h1, h2, h3, h4, h5, h6').toArray();
-    for (const h of headings) {
-      const text = $(h).text().trim();
-      if (text.length >= 3 && text.length <= 300) {
-        return text;
+  // ADVANCED TITLE EXTRACTION
+  extractTitleAdvanced($, container) {
+    const strategies = [
+      // Structured data
+      () => container.find('[itemprop="name"]').first().text().trim(),
+      
+      // Headings
+      () => {
+        const headings = container.find('h1, h2, h3').toArray();
+        for (const h of headings) {
+          const text = $(h).clone().children('span, small').remove().end().text().trim();
+          if (text.length >= 5 && text.length <= 300) return text;
+        }
+        return null;
+      },
+      
+      // Title/name classes
+      () => {
+        const selectors = [
+          '[class*="title"]:not([class*="subtitle"])',
+          '[class*="Title"]:not([class*="Subtitle"])',
+          '[class*="name"]:not([class*="username"])',
+          '[class*="Name"]:not([class*="Username"])',
+          '[class*="heading"]',
+          '[data-testid*="title"]',
+          '[data-testid*="name"]',
+          '[aria-label*="title"]'
+        ];
+        
+        for (const sel of selectors) {
+          const text = container.find(sel).first().clone().children().remove().end().text().trim();
+          if (text.length >= 5 && text.length <= 300) return text;
+        }
+        return null;
+      },
+      
+      // Link text
+      () => {
+        const links = container.find('a[href]').toArray();
+        for (const link of links) {
+          const text = $(link).clone().children('span').remove().end().text().trim();
+          if (text.length >= 10 && text.length <= 200 && 
+              !text.match(/^(click|view|read|more|see|learn|shop|buy)/i)) {
+            return text;
+          }
+        }
+        return null;
+      },
+      
+      // Strong/bold text
+      () => {
+        const bold = container.find('strong, b').first().text().trim();
+        if (bold.length >= 10 && bold.length <= 200) return bold;
+        return null;
       }
-    }
-
-    // Strategy 2: Common class patterns
-    const titlePatterns = [
-      '[class*="title"]', '[class*="Title"]', '[class*="name"]', '[class*="Name"]',
-      '[class*="heading"]', '[class*="Heading"]', '[data-testid*="title"]',
-      '[aria-label*="title"]', '[itemprop="name"]'
     ];
-    
-    for (const pattern of titlePatterns) {
-      const el = container.find(pattern).first();
-      const text = el.text().trim();
-      if (text.length >= 3 && text.length <= 300) {
-        return text;
-      }
-    }
 
-    // Strategy 3: First significant link text
-    const links = container.find('a');
-    for (let i = 0; i < links.length; i++) {
-      const text = $(links[i]).text().trim();
-      if (text.length >= 10 && text.length <= 200 && !text.match(/^(click|view|read|more|see)/i)) {
-        return text;
-      }
-    }
-
-    // Strategy 4: First significant text block
-    const textBlocks = container.find('span, div, p').toArray();
-    for (const block of textBlocks.slice(0, 10)) {
-      const text = $(block).clone().children().remove().end().text().trim();
-      if (text.length >= 10 && text.length <= 200) {
-        return text;
-      }
+    for (const strategy of strategies) {
+      const result = strategy();
+      if (result) return result;
     }
 
     return null;
   }
 
-  // Extract price with pattern matching
-  extractPrice($, container) {
-    // Strategy 1: Price-specific classes
+  // ADVANCED PRICE EXTRACTION
+  extractPriceAdvanced($, container) {
+    // Structured data
+    const structuredPrice = container.find('[itemprop="price"]').first().text().trim();
+    if (structuredPrice && this.looksLikePrice(structuredPrice)) {
+      return this.cleanPrice(structuredPrice);
+    }
+
+    // Price classes
     const priceSelectors = [
-      '[class*="price"]', '[class*="Price"]', '[class*="cost"]', '[class*="Cost"]',
-      '[class*="amount"]', '[data-testid*="price"]', '[itemprop="price"]'
+      '[class*="price"]:not([class*="original"]):not([class*="old"])',
+      '[class*="Price"]:not([class*="Original"]):not([class*="Old"])',
+      '[class*="cost"]', '[class*="Cost"]',
+      '[class*="amount"]', '[class*="Amount"]',
+      '[data-testid*="price"]',
+      '[aria-label*="price"]'
     ];
     
     for (const sel of priceSelectors) {
-      const text = container.find(sel).first().text().trim();
-      if (text && this.looksLikePrice(text)) {
-        return text.replace(/\s+/g, ' ');
+      const elements = container.find(sel).toArray();
+      for (const el of elements) {
+        const text = $(el).text().trim();
+        if (this.looksLikePrice(text)) {
+          return this.cleanPrice(text);
+        }
       }
     }
 
-    // Strategy 2: Pattern matching in all text
+    // Pattern matching
     const pricePatterns = [
-      /[$₹€£¥]\s*[\d,]+\.?\d*/,
-      /[\d,]+\.?\d*\s*[$₹€£¥]/,
-      /(?:USD|INR|EUR|GBP|USD|CAD)\s*[\d,]+\.?\d*/,
-      /[\d,]+\.?\d*\s*(?:USD|INR|EUR|GBP|USD|CAD)/,
-      /(?:Rs\.?|INR)\s*[\d,]+\.?\d*/
+      /[$₹€£¥]\s*[\d,]+\.?\d*/g,
+      /[\d,]+\.?\d*\s*[$₹€£¥]/g,
+      /(?:USD|INR|EUR|GBP|CAD|AUD)\s*[\d,]+\.?\d*/gi,
+      /[\d,]+\.?\d*\s*(?:USD|INR|EUR|GBP|CAD|AUD)/gi,
+      /(?:Rs\.?|INR|₹)\s*[\d,]+\.?\d*/gi
     ];
 
     const allText = container.text();
     for (const pattern of pricePatterns) {
-      const match = allText.match(pattern);
-      if (match) {
-        return match[0].trim();
+      const matches = allText.match(pattern);
+      if (matches) {
+        // Return the first reasonable price
+        for (const match of matches) {
+          if (this.looksLikePrice(match)) {
+            return this.cleanPrice(match);
+          }
+        }
       }
     }
 
@@ -431,142 +540,234 @@ class UniversalScraper {
   }
 
   looksLikePrice(text) {
-    return /[$₹€£¥]|\d+[.,]\d{2}|(?:USD|INR|EUR|GBP|Rs)/i.test(text);
+    return /[$₹€£¥]|\d+[.,]\d{2}|(?:USD|INR|EUR|GBP|Rs)/i.test(text) &&
+           parseFloat(text.replace(/[^0-9.]/g, '')) > 0;
   }
 
-  // Extract image intelligently
-  extractImage($, container) {
-    const images = container.find('img').toArray();
+  cleanPrice(text) {
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  // ADVANCED IMAGE EXTRACTION
+  extractImageAdvanced($, container) {
+    const images = container.find('img, picture img').toArray();
     
-    // Prioritize larger, content images
     let bestImg = null;
-    let bestScore = 0;
+    let bestScore = -1000;
 
     for (const img of images) {
       const $img = $(img);
-      const src = $img.attr('src') || $img.attr('data-src') || $img.attr('data-lazy') || 
-                  $img.attr('data-original') || ($img.attr('srcset') || '').split(' ')[0];
-      
-      if (!src || src.includes('data:image') || src.length < 10) continue;
-      
-      // Score image
       let score = 0;
-      const width = parseInt($img.attr('width') || '0');
-      const height = parseInt($img.attr('height') || '0');
       
-      if (width > 100) score += 20;
-      if (height > 100) score += 20;
-      if (width > 200) score += 30;
+      // Get all possible image sources
+      const src = $img.attr('src') || 
+                  $img.attr('data-src') || 
+                  $img.attr('data-lazy-src') ||
+                  $img.attr('data-original') || 
+                  $img.attr('data-lazy') ||
+                  ($img.attr('srcset') || '').split(',')[0].split(' ')[0];
       
-      // Avoid icons, logos, sprites
+      if (!src || src.startsWith('data:image') || src.length < 10) continue;
+      
+      // Dimensions
+      const width = parseInt($img.attr('width') || $img.css('width') || '0');
+      const height = parseInt($img.attr('height') || $img.css('height') || '0');
+      
+      if (width > 80) score += 30;
+      if (width > 150) score += 40;
+      if (width > 250) score += 50;
+      if (height > 80) score += 30;
+      if (height > 150) score += 40;
+      
+      // Alt text quality
+      const alt = $img.attr('alt') || '';
+      if (alt.length > 5) score += 20;
+      
+      // Class names
+      const classes = ($img.attr('class') || '').toLowerCase();
+      if (classes.includes('product') || classes.includes('item') || classes.includes('main')) {
+        score += 50;
+      }
+      if (classes.includes('thumbnail') || classes.includes('thumb')) {
+        score += 20;
+      }
+      
+      // Penalty for icons, logos, etc.
       const srcLower = src.toLowerCase();
-      if (srcLower.includes('icon') || srcLower.includes('logo') || srcLower.includes('sprite')) {
-        score -= 50;
+      if (srcLower.includes('icon') || srcLower.includes('logo') || 
+          srcLower.includes('sprite') || srcLower.includes('avatar') ||
+          srcLower.includes('placeholder')) {
+        score -= 100;
+      }
+      
+      // Lazy loading indicators (good sign)
+      if ($img.attr('loading') === 'lazy' || $img.attr('data-src')) {
+        score += 15;
       }
       
       if (score > bestScore) {
         bestScore = score;
         try {
           bestImg = src.startsWith('http') ? src : new URL(src, this.url).href;
-        } catch (e) {}
+        } catch (e) {
+          // Invalid URL
+        }
       }
     }
 
     return bestImg;
   }
 
-  // Extract link
-  extractLink($, container) {
+  // ADVANCED LINK EXTRACTION
+  extractLinkAdvanced($, container) {
     const links = container.find('a[href]').toArray();
     
+    let bestLink = null;
+    let bestScore = 0;
+
     for (const link of links) {
-      const href = $(link).attr('href');
-      if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
+      const $link = $(link);
+      const href = $link.attr('href');
       
+      if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) continue;
+      
+      let score = 0;
+      
+      // Prefer links with meaningful text
+      const text = $link.text().trim();
+      if (text.length > 10) score += 20;
+      
+      // Prefer links that contain images or titles
+      if ($link.find('img').length > 0) score += 30;
+      if ($link.find('h1, h2, h3, h4').length > 0) score += 40;
+      
+      // Class indicators
+      const classes = ($link.attr('class') || '').toLowerCase();
+      if (classes.includes('product') || classes.includes('item') || classes.includes('detail')) {
+        score += 35;
+      }
+      
+      // Prefer same-domain links
       try {
         const fullUrl = href.startsWith('http') ? href : new URL(href, this.url).href;
         const linkDomain = new URL(fullUrl).hostname;
         const baseDomain = this.domain.split('.').slice(-2).join('.');
         
-        // Keep same-domain links
-        if (linkDomain.includes(baseDomain) || baseDomain.includes(linkDomain.split('.').slice(-2).join('.'))) {
-          return fullUrl;
+        if (linkDomain.includes(baseDomain)) {
+          score += 25;
         }
-      } catch (e) {}
+        
+        if (score > bestScore) {
+          bestScore = score;
+          bestLink = fullUrl;
+        }
+      } catch (e) {
+        // Invalid URL
+      }
+    }
+
+    return bestLink;
+  }
+
+  // ADVANCED DESCRIPTION EXTRACTION
+  extractDescriptionAdvanced($, container) {
+    const strategies = [
+      // Structured data
+      () => container.find('[itemprop="description"]').first().text().trim(),
+      
+      // Description classes
+      () => {
+        const selectors = [
+          '[class*="description"]', '[class*="Description"]',
+          '[class*="desc"]', '[class*="Desc"]',
+          '[class*="summary"]', '[class*="Summary"]',
+          '[class*="detail"]', '[class*="Detail"]',
+          '[class*="content"]', '[class*="Content"]',
+          '[data-testid*="description"]'
+        ];
+        
+        for (const sel of selectors) {
+          const text = container.find(sel).first().text().trim();
+          if (text.length >= 30 && text.length <= 2000) {
+            return text.substring(0, 800);
+          }
+        }
+        return null;
+      },
+      
+      // Paragraphs
+      () => {
+        const paragraphs = container.find('p').toArray();
+        for (const p of paragraphs) {
+          const text = $(p).text().trim();
+          if (text.length >= 30 && text.length <= 2000) {
+            return text.substring(0, 800);
+          }
+        }
+        return null;
+      },
+      
+      // Longest text block
+      () => {
+        let longest = '';
+        container.find('div, span, section').each((_, el) => {
+          const text = $(el).clone().children().remove().end().text().trim();
+          if (text.length > longest.length && text.length >= 40 && text.length <= 2000) {
+            longest = text;
+          }
+        });
+        return longest ? longest.substring(0, 800) : null;
+      }
+    ];
+
+    for (const strategy of strategies) {
+      const result = strategy();
+      if (result) return result;
     }
 
     return null;
   }
 
-  // Extract description
-  extractDescription($, container) {
-    const descSelectors = [
-      'p', '[class*="desc"]', '[class*="Desc"]', '[class*="description"]',
-      '[class*="summary"]', '[class*="detail"]', '[itemprop="description"]'
-    ];
+  // ADVANCED METADATA EXTRACTION
+  extractMetadataAdvanced($, container) {
+    const metadata = {};
+    
+    // Structured data
+    container.find('[itemprop]').each((_, el) => {
+      const prop = $(el).attr('itemprop');
+      const value = $(el).text().trim() || $(el).attr('content');
+      if (value && value.length < 200 && !metadata[prop]) {
+        metadata[prop] = value;
+      }
+    });
 
-    for (const sel of descSelectors) {
-      const elements = container.find(sel).toArray();
-      for (const el of elements) {
-        const text = $(el).text().trim();
-        if (text.length >= 20 && text.length <= 1000) {
-          return text.substring(0, 500);
+    // Common metadata patterns
+    const patterns = {
+      rating: '[class*="rating"], [class*="Rating"], [class*="star"], [aria-label*="rating"]',
+      reviews: '[class*="review"], [class*="Review"]',
+      availability: '[class*="stock"], [class*="Stock"], [class*="available"], [class*="Available"]',
+      brand: '[class*="brand"], [class*="Brand"], [itemprop="brand"]',
+      category: '[class*="category"], [class*="Category"], [class*="type"]',
+      sku: '[class*="sku"], [class*="SKU"], [class*="product-id"]'
+    };
+
+    for (const [key, selector] of Object.entries(patterns)) {
+      if (!metadata[key]) {
+        const value = container.find(selector).first().text().trim();
+        if (value && value.length > 0 && value.length < 200) {
+          metadata[key] = value;
         }
       }
     }
 
-    // Fallback: find longest paragraph-like text
-    let longestText = '';
-    container.find('div, span, p').each((_, el) => {
-      const text = $(el).clone().children().remove().end().text().trim();
-      if (text.length > longestText.length && text.length >= 30 && text.length <= 1000) {
-        longestText = text;
-      }
-    });
-
-    return longestText || null;
-  }
-
-  // Extract metadata (flexible)
-  extractMetadata($, container) {
-    const metadata = {};
-    
-    // Common metadata patterns
-    const patterns = [
-      '[class*="rating"]', '[class*="Rating"]', '[class*="star"]',
-      '[class*="review"]', '[class*="Review"]',
-      '[class*="follower"]', '[class*="Follower"]',
-      '[class*="repo"]', '[class*="language"]',
-      '[class*="delivery"]', '[class*="time"]',
-      '[class*="stock"]', '[class*="available"]',
-      '[class*="cuisine"]', '[class*="category"]'
-    ];
-
-    patterns.forEach(pattern => {
-      container.find(pattern).each((_, el) => {
-        const $el = $(el);
-        const text = $el.text().trim();
-        
-        if (text && text.length > 0 && text.length < 150) {
-          const classes = ($el.attr('class') || '').split(/\s+/);
-          const key = classes.find(c => c.length > 2) || 'meta';
-          const cleanKey = key.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '_');
-          
-          if (!metadata[cleanKey]) {
-            metadata[cleanKey] = text;
-          }
-        }
-      });
-    });
-
-    // Extract any data attributes
-    container.find('[data-value], [data-count], [data-score]').each((_, el) => {
+    // Data attributes
+    container.find('[data-value], [data-count], [data-rating], [data-price]').each((_, el) => {
       const $el = $(el);
       Object.keys(el.attribs).forEach(attr => {
-        if (attr.startsWith('data-')) {
-          const key = attr.replace('data-', '');
+        if (attr.startsWith('data-') && !attr.includes('test') && !attr.includes('id')) {
+          const key = attr.replace('data-', '').replace(/-/g, '_');
           const value = $el.attr(attr);
-          if (value && value.length < 100) {
+          if (value && value.length < 150 && !metadata[key]) {
             metadata[key] = value;
           }
         }
@@ -576,13 +777,62 @@ class UniversalScraper {
     return metadata;
   }
 
-  // Check if item has valid data
+  // Check if item is valid
   isValidItem(item) {
-    const hasBasicInfo = item.name || item.link;
-    const hasRichInfo = item.price || item.image || item.description;
+    const hasTitle = item.name && item.name.length >= 3;
+    const hasPrice = item.price && item.price.length > 0;
+    const hasImage = item.image && item.image.length > 0;
+    const hasDescription = item.description && item.description.length >= 20;
+    const hasLink = item.link && item.link.length > 0;
     const hasMetadata = Object.keys(item.metadata).length > 0;
     
-    return (hasBasicInfo || hasRichInfo || hasMetadata) && item.confidence >= 0.1;
+    const criteriaCount = [hasTitle, hasPrice, hasImage, hasDescription, hasLink, hasMetadata]
+      .filter(Boolean).length;
+    
+    return criteriaCount >= 2 && item.confidence >= 0.15;
+  }
+
+  // Check for duplicate content
+  isDuplicate(item) {
+    const signature = this.createItemSignature(item);
+    
+    if (this.seenContent.has(signature)) {
+      return true;
+    }
+    
+    this.seenContent.add(signature);
+    return false;
+  }
+
+  // Create unique signature for item
+  createItemSignature(item) {
+    const parts = [
+      item.name ? item.name.toLowerCase().substring(0, 50) : '',
+      item.price ? item.price.replace(/\s/g, '') : '',
+      item.link ? item.link : ''
+    ];
+    
+    return parts.filter(p => p.length > 0).join('|');
+  }
+
+  // Remove duplicate items from results
+  removeDuplicates() {
+    const seen = new Set();
+    const unique = [];
+    let duplicateCount = 0;
+
+    for (const item of this.results.items) {
+      const sig = this.createItemSignature(item);
+      if (!seen.has(sig)) {
+        seen.add(sig);
+        unique.push(item);
+      } else {
+        duplicateCount++;
+      }
+    }
+
+    this.results.items = unique;
+    this.results.summary.duplicatesRemoved = duplicateCount;
   }
 
   calculateSummary() {
@@ -596,6 +846,8 @@ class UniversalScraper {
 
     if (this.results.items.length === 0) {
       this.results.summary.warnings.push('No structured data found - page may require login or have anti-bot protection');
+    } else if (this.results.summary.avgConfidence < 0.3) {
+      this.results.summary.warnings.push('Low confidence scores - extracted data may be incomplete');
     }
   }
 }
