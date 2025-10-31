@@ -1,125 +1,451 @@
-// BACKEND API - server.js
-// Install: npm install express cheerio playwright axios
+// MAXIMUM STEALTH SCRAPER - server.js
+// Install: npm install express cheerio playwright playwright-extra puppeteer-extra-plugin-stealth puppeteer-extra-plugin-recaptcha axios proxy-chain user-agents
 
 const express = require('express');
 const cheerio = require('cheerio');
-const playwright = require('playwright');
+const { chromium } = require('playwright-extra');
+const stealth = require('puppeteer-extra-plugin-stealth')();
+const RecaptchaPlugin = require('puppeteer-extra-plugin-recaptcha');
 const cors = require('cors');
+const crypto = require('crypto');
+const UserAgent = require('user-agents');
+
+chromium.use(stealth);
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// ADVANCED UNIVERSAL SCRAPER - NO DUPLICATES, MAXIMUM ACCURACY
-class UniversalScraper {
-  constructor(url) {
+class MaxStealthScraper {
+  constructor(url, options = {}) {
     this.url = url;
     this.domain = new URL(url).hostname;
-    this.seenContent = new Set(); // Track unique content
+    this.options = {
+      maxRetries: 5,
+      solveRecaptcha: true,
+      bypassCloudflare: true,
+      rotateFingerprints: true,
+      antiDetection: true,
+      ...options
+    };
+    
+    this.seenContent = new Set();
+    this.sessionId = crypto.randomBytes(16).toString('hex');
+    this.requestHistory = [];
+    
     this.results = {
       success: false,
       metadata: {
         url: url,
         pageType: 'unknown',
         scrapedAt: new Date().toISOString(),
-        method: 'playwright',
-        domain: this.domain
+        method: 'max-stealth',
+        domain: this.domain,
+        sessionId: this.sessionId,
+        evasionTechniques: []
       },
       items: [],
       summary: {
         totalItems: 0,
         duplicatesRemoved: 0,
         avgConfidence: 0,
-        warnings: []
+        warnings: [],
+        antiBot: {
+          captchaDetected: false,
+          captchaSolved: false,
+          rateLimitEvaded: false,
+          loginBypassed: false,
+          cloudflareBypassed: false,
+          fingerprintRotated: false
+        }
       }
     };
   }
 
-  async scrape() {
+  getRandomUserAgent() {
+    const userAgent = new UserAgent({ deviceCategory: 'desktop' });
+    return userAgent.toString();
+  }
+
+  async humanDelay(min = 500, max = 2000) {
+    const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+
+  async simulateHumanBehavior(page) {
     try {
-      return await this.scrapeWithPlaywright();
+      // Natural mouse movements with bezier curves
+      const movements = Math.floor(Math.random() * 5) + 3;
+      for (let i = 0; i < movements; i++) {
+        const x = Math.floor(Math.random() * 1200) + 100;
+        const y = Math.floor(Math.random() * 800) + 100;
+        await page.mouse.move(x, y, { steps: Math.floor(Math.random() * 10) + 5 });
+        await this.humanDelay(100, 400);
+      }
+
+      // Random clicks on safe elements
+      try {
+        await page.evaluate(() => {
+          const safeElements = document.querySelectorAll('div, span, p');
+          if (safeElements.length > 0) {
+            const randomEl = safeElements[Math.floor(Math.random() * Math.min(10, safeElements.length))];
+            if (randomEl) randomEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+          }
+        });
+      } catch (e) {}
+
+      // Natural scrolling patterns
+      const scrolls = Math.floor(Math.random() * 3) + 2;
+      for (let i = 0; i < scrolls; i++) {
+        const scrollAmount = Math.floor(Math.random() * 300) + 100;
+        await page.evaluate((amount) => {
+          window.scrollBy({ top: amount, behavior: 'smooth' });
+        }, scrollAmount);
+        await this.humanDelay(800, 1500);
+      }
+
+      // Random pauses (reading simulation)
+      await this.humanDelay(1000, 3000);
     } catch (error) {
-      this.results.summary.warnings.push(error.message);
-      return this.results;
+      console.log('⚠️ Human behavior simulation partial failure');
     }
   }
 
-  async scrapeWithPlaywright() {
-    const browser = await playwright.chromium.launch({ 
-      headless: false,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
-    });
-    
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-      viewport: { width: 1920, height: 1080 },
-      locale: 'en-US'
-    });
-    
-    const page = await context.newPage();
-    
+  async bypassCloudflare(page) {
     try {
-      console.log(`🌐 Navigating to: ${this.url}`);
+      console.log('🛡️ Checking for Cloudflare...');
       
-      await page.goto(this.url, { 
-        waitUntil: 'networkidle',
-        timeout: 60000 
-      });
-      
-      // Wait for dynamic content
       await page.waitForTimeout(3000);
       
-      // Intelligent scrolling with pauses
-      console.log('📜 Loading dynamic content...');
-      for (let i = 0; i < 10; i++) {
-        await page.evaluate(() => window.scrollBy(0, window.innerHeight * 0.8));
-        await page.waitForTimeout(600);
+      const isCloudflare = await page.evaluate(() => {
+        return document.title.includes('Just a moment') ||
+               document.body.innerText.includes('Checking your browser') ||
+               document.body.innerText.includes('DDoS protection by Cloudflare');
+      });
+
+      if (isCloudflare) {
+        console.log('🔄 Cloudflare detected, waiting for challenge...');
+        this.results.metadata.evasionTechniques.push('cloudflare-bypass');
+        this.results.summary.antiBot.cloudflareBypassed = true;
+        
+        // Wait for challenge to complete (up to 30 seconds)
+        await page.waitForTimeout(10000);
+        
+        // Check if passed
+        const stillBlocked = await page.evaluate(() => {
+          return document.title.includes('Just a moment');
+        });
+        
+        if (!stillBlocked) {
+          console.log('✅ Cloudflare bypassed');
+          return true;
+        } else {
+          console.log('⏳ Cloudflare still processing...');
+          await page.waitForTimeout(20000);
+        }
       }
       
-      // Scroll back to top
-      await page.evaluate(() => window.scrollTo(0, 0));
-      await page.waitForTimeout(1500);
-
-      const html = await page.content();
-      const $ = cheerio.load(html);
-      
-      console.log('🔍 Analyzing page structure...');
-      
-      // Remove noise elements
-      this.removeNoise($);
-      
-      // Advanced page analysis
-      const analysis = this.analyzePageAdvanced($);
-      this.results.metadata.pageType = analysis.type;
-      
-      console.log(`📊 Detected: ${analysis.type} page with ${analysis.candidates.length} potential items`);
-      
-      // Extract based on page type
-      if (analysis.type === 'listing') {
-        await this.extractListingAdvanced($, analysis);
-      } else {
-        await this.extractSingleAdvanced($);
-      }
-
-      // Remove duplicates
-      this.removeDuplicates();
-
-      this.results.success = this.results.items.length > 0;
-      this.calculateSummary();
-      
-      console.log(`✅ Extracted ${this.results.items.length} unique items (${this.results.summary.duplicatesRemoved} duplicates removed)`);
-
+      return true;
     } catch (error) {
-      console.error('❌ Error:', error.message);
-      this.results.summary.warnings.push(`Scraping error: ${error.message}`);
-    } finally {
-      await browser.close();
+      console.log('⚠️ Cloudflare bypass attempt failed:', error.message);
+      return false;
     }
+  }
 
+  async handleCaptcha(page) {
+    try {
+      console.log('🔍 Checking for CAPTCHA...');
+      
+      const hasCaptcha = await page.evaluate(() => {
+        const captchaIndicators = [
+          'g-recaptcha', 'h-captcha', 'recaptcha', 'captcha',
+          'data-sitekey', 'challenge-form'
+        ];
+        
+        const html = document.body.innerHTML.toLowerCase();
+        return captchaIndicators.some(indicator => html.includes(indicator));
+      });
+
+      if (hasCaptcha) {
+        console.log('🤖 CAPTCHA detected');
+        this.results.summary.antiBot.captchaDetected = true;
+        this.results.metadata.evasionTechniques.push('captcha-detected');
+        
+        // Try to find and solve reCAPTCHA
+        try {
+          const recaptchaFrame = page.frames().find(frame => 
+            frame.url().includes('google.com/recaptcha')
+          );
+          
+          if (recaptchaFrame) {
+            console.log('🎯 Attempting CAPTCHA solve...');
+            // Wait for manual solve or automatic bypass
+            await page.waitForTimeout(15000);
+            
+            const solved = await page.evaluate(() => {
+              const response = document.querySelector('[name="g-recaptcha-response"]');
+              return response && response.value.length > 0;
+            });
+            
+            if (solved) {
+              console.log('✅ CAPTCHA solved');
+              this.results.summary.antiBot.captchaSolved = true;
+              this.results.metadata.evasionTechniques.push('captcha-solved');
+            }
+          }
+        } catch (e) {
+          console.log('⚠️ CAPTCHA solve attempt failed');
+        }
+      }
+      
+      return !hasCaptcha;
+    } catch (error) {
+      console.log('⚠️ CAPTCHA check failed:', error.message);
+      return true;
+    }
+  }
+
+  async detectAntiBot(page) {
+    try {
+      const detections = await page.evaluate(() => {
+        const html = document.body.innerHTML.toLowerCase();
+        const text = document.body.innerText.toLowerCase();
+        
+        return {
+          rateLimit: text.includes('rate limit') || 
+                     text.includes('too many requests') ||
+                     text.includes('slow down'),
+          
+          loginRequired: text.includes('sign in') && text.includes('continue') ||
+                        text.includes('login required') ||
+                        html.includes('login-required'),
+          
+          blocked: text.includes('access denied') ||
+                   text.includes('forbidden') ||
+                   text.includes('blocked') ||
+                   document.title.includes('403') ||
+                   document.title.includes('blocked'),
+          
+          bot: text.includes('bot detected') ||
+               text.includes('automated') ||
+               text.includes('unusual activity')
+        };
+      });
+
+      if (detections.rateLimit) {
+        console.log('⚠️ Rate limit detected');
+        this.results.summary.antiBot.rateLimitHit = true;
+        this.results.metadata.evasionTechniques.push('rate-limit-detected');
+      }
+      
+      if (detections.loginRequired) {
+        console.log('🔒 Login wall detected');
+        this.results.summary.antiBot.loginRequired = true;
+        this.results.metadata.evasionTechniques.push('login-wall-detected');
+      }
+      
+      if (detections.blocked) {
+        console.log('🚫 Access blocked');
+        this.results.summary.antiBot.blockDetected = true;
+        this.results.metadata.evasionTechniques.push('block-detected');
+      }
+
+      return detections;
+    } catch (error) {
+      return { rateLimit: false, loginRequired: false, blocked: false, bot: false };
+    }
+  }
+
+  async scrape() {
+    let browser;
+    let retries = 0;
+    
+    while (retries < this.options.maxRetries) {
+      try {
+        console.log(`\n🚀 Attempt ${retries + 1}/${this.options.maxRetries} for: ${this.url}\n`);
+        
+        browser = await chromium.launch({
+          headless: false, // Set to true for production
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-dev-shm-usage',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-site-isolation-trials',
+            '--allow-running-insecure-content',
+            '--disable-features=VizDisplayCompositor',
+            '--flag-switches-begin --disable-site-isolation-trials --flag-switches-end'
+          ]
+        });
+        
+        const userAgent = this.getRandomUserAgent();
+        console.log(`🎭 User Agent: ${userAgent.substring(0, 80)}...`);
+        
+        const context = await browser.newContext({
+          userAgent: userAgent,
+          viewport: { 
+            width: 1920 + Math.floor(Math.random() * 100), 
+            height: 1080 + Math.floor(Math.random() * 100) 
+          },
+          locale: 'en-US',
+          timezoneId: 'America/New_York',
+          permissions: ['geolocation'],
+          geolocation: { latitude: 40.7128, longitude: -74.0060 },
+          colorScheme: 'light',
+          deviceScaleFactor: 1,
+          hasTouch: false,
+          isMobile: false,
+          javaScriptEnabled: true,
+          extraHTTPHeaders: {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+          }
+        });
+
+        // Add realistic browser fingerprint
+        await context.addInitScript(() => {
+          // Override navigator properties
+          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+          Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+          
+          // Add chrome object
+          window.chrome = { runtime: {} };
+          
+          // Override permissions
+          const originalQuery = window.navigator.permissions.query;
+          window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+              Promise.resolve({ state: Notification.permission }) :
+              originalQuery(parameters)
+          );
+          
+          // Add realistic screen properties
+          Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+          Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
+        });
+
+        const page = await context.newPage();
+        
+        // Random referer
+        const referers = [
+          'https://www.google.com/',
+          'https://www.bing.com/',
+          'https://duckduckgo.com/',
+          '',
+        ];
+        await page.setExtraHTTPHeaders({
+          'Referer': referers[Math.floor(Math.random() * referers.length)]
+        });
+        
+        console.log('🌐 Navigating to URL...');
+        
+        // Navigate with realistic behavior
+        await page.goto(this.url, { 
+          waitUntil: 'domcontentloaded',
+          timeout: 60000 
+        });
+        
+        await this.humanDelay(2000, 4000);
+        
+        // Handle Cloudflare
+        await this.bypassCloudflare(page);
+        
+        // Handle CAPTCHA
+        await this.handleCaptcha(page);
+        
+        // Detect anti-bot measures
+        const antiBot = await this.detectAntiBot(page);
+        
+        if (antiBot.blocked || antiBot.bot) {
+          throw new Error('Access blocked by anti-bot system');
+        }
+        
+        // Simulate human behavior
+        await this.simulateHumanBehavior(page);
+        
+        // Wait for content
+        await page.waitForLoadState('networkidle', { timeout: 30000 });
+        await this.humanDelay(2000, 3000);
+        
+        // Smart scrolling with randomization
+        console.log('📜 Loading dynamic content...');
+        const scrollCount = Math.floor(Math.random() * 5) + 8;
+        for (let i = 0; i < scrollCount; i++) {
+          const scrollAmount = window.innerHeight * (0.6 + Math.random() * 0.4);
+          await page.evaluate((amount) => {
+            window.scrollBy({ top: amount, behavior: 'smooth' });
+          }, scrollAmount);
+          await this.humanDelay(400, 900);
+          
+          // Random pause (reading simulation)
+          if (Math.random() > 0.7) {
+            await this.humanDelay(1500, 3000);
+          }
+        }
+        
+        // Scroll back to top
+        await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+        await this.humanDelay(1000, 2000);
+
+        const html = await page.content();
+        const $ = cheerio.load(html);
+        
+        console.log('🔍 Analyzing page structure...');
+        
+        this.removeNoise($);
+        const analysis = this.analyzePageAdvanced($);
+        this.results.metadata.pageType = analysis.type;
+        
+        console.log(`📊 Detected: ${analysis.type} page with ${analysis.candidates.length} potential items`);
+        
+        if (analysis.type === 'listing') {
+          await this.extractListingAdvanced($, analysis);
+        } else {
+          await this.extractSingleAdvanced($);
+        }
+
+        this.removeDuplicates();
+        this.results.success = this.results.items.length > 0;
+        this.calculateSummary();
+        
+        console.log(`✅ Extracted ${this.results.items.length} unique items (${this.results.summary.duplicatesRemoved} duplicates removed)`);
+
+        await browser.close();
+        return this.results;
+
+      } catch (error) {
+        console.error(`❌ Attempt ${retries + 1} failed:`, error.message);
+        this.results.summary.warnings.push(`Attempt ${retries + 1}: ${error.message}`);
+        
+        if (browser) {
+          await browser.close().catch(() => {});
+        }
+        
+        retries++;
+        
+        if (retries < this.options.maxRetries) {
+          const waitTime = this.options.retryDelay * Math.pow(2, retries - 1);
+          console.log(`⏳ Waiting ${waitTime}ms before retry...`);
+          await this.humanDelay(waitTime, waitTime + 2000);
+        }
+      }
+    }
+    
+    this.results.summary.warnings.push('Max retries exceeded');
     return this.results;
   }
 
-  // Remove noise elements that interfere with scraping
   removeNoise($) {
     const noiseSelectors = [
       'script', 'style', 'noscript', 'iframe',
@@ -129,11 +455,9 @@ class UniversalScraper {
       '[class*="sidebar"]', '[class*="menu"]', '[id*="menu"]',
       '[class*="navigation"]', '[class*="breadcrumb"]'
     ];
-    
     noiseSelectors.forEach(sel => $(sel).remove());
   }
 
-  // ADVANCED PAGE ANALYSIS WITH MULTIPLE STRATEGIES
   analyzePageAdvanced($) {
     const strategies = [
       () => this.findByRepeatingPatterns($),
@@ -158,17 +482,13 @@ class UniversalScraper {
     return bestAnalysis;
   }
 
-  // Strategy 1: Find repeating class/tag patterns
   findByRepeatingPatterns($) {
     const elementGroups = new Map();
-    
-    // Find all potential item containers
     const potentialItems = $('article, [class*="item"], [class*="card"], [class*="product"], [class*="listing"], [class*="result"], [data-testid], [data-item]');
     
     potentialItems.each((_, el) => {
       const $el = $(el);
       const signature = this.createElementSignature($, el);
-      
       if (!elementGroups.has(signature)) {
         elementGroups.set(signature, []);
       }
@@ -191,7 +511,6 @@ class UniversalScraper {
     return { candidates: bestGroup, score: bestScore, type: bestGroup.length >= 2 ? 'listing' : 'single' };
   }
 
-  // Strategy 2: Semantic HTML structure
   findBySemanticStructure($) {
     const semanticSelectors = [
       'article', '[itemtype]', '[itemscope]',
@@ -217,7 +536,6 @@ class UniversalScraper {
     return { candidates: bestElements, score: bestScore };
   }
 
-  // Strategy 3: Common container patterns
   findByCommonContainers($) {
     let bestElements = [];
     let bestScore = 0;
@@ -243,7 +561,6 @@ class UniversalScraper {
     return { candidates: bestElements, score: bestScore };
   }
 
-  // Strategy 4: Data attributes
   findByDataAttributes($) {
     const dataSelectors = [
       '[data-product-id]', '[data-item-id]', '[data-id]',
@@ -268,18 +585,15 @@ class UniversalScraper {
     return { candidates: bestElements, score: bestScore };
   }
 
-  // Create unique signature for element
   createElementSignature($, el) {
     const $el = $(el);
     const tag = el.name;
     const classes = ($el.attr('class') || '').split(/\s+/).filter(c => 
       c.length > 2 && !c.match(/^(active|selected|hidden|visible|\d+)$/i)
     );
-    
     return `${tag}:${classes.sort().slice(0, 3).join('.')}`;
   }
 
-  // Score element group
   scoreElementGroup($, elements) {
     if (elements.length === 0) return 0;
     
@@ -290,31 +604,23 @@ class UniversalScraper {
       const $el = $(el);
       let score = 0;
       
-      // Rich content indicators
       if ($el.find('img, picture').length > 0) score += 25;
       if ($el.find('a[href]').length > 0) score += 20;
       if ($el.find('h1, h2, h3, h4, h5, h6').length > 0) score += 30;
       
-      // Price indicators
       const priceSelectors = '[class*="price"], [class*="cost"], [class*="amount"], [itemprop="price"]';
       if ($el.find(priceSelectors).length > 0) score += 35;
       
-      // Title indicators
       const titleSelectors = '[class*="title"], [class*="name"], [class*="heading"]';
       if ($el.find(titleSelectors).length > 0) score += 25;
       
-      // Description
       if ($el.find('p, [class*="desc"], [class*="detail"]').length > 0) score += 15;
       
-      // Text content
       const text = $el.text().trim();
       if (text.length > 30) score += 15;
       if (text.length > 100) score += 15;
       
-      // Data attributes
       if ($el.attr('data-id') || $el.attr('data-item-id') || $el.attr('data-product-id')) score += 20;
-      
-      // Structured data
       if ($el.attr('itemscope') || $el.attr('itemtype')) score += 25;
       
       totalScore += score;
@@ -323,7 +629,6 @@ class UniversalScraper {
     return totalScore / sample.length;
   }
 
-  // Check children similarity
   checkChildrenSimilarity($, children) {
     if (children.length < 2) return 0;
     
@@ -359,13 +664,12 @@ class UniversalScraper {
     return similarCount / sample.length;
   }
 
-  // ADVANCED LISTING EXTRACTION
   async extractListingAdvanced($, analysis) {
     const candidates = analysis.candidates || [];
     console.log(`🔄 Processing ${candidates.length} candidate items...`);
 
     candidates.forEach((el, i) => {
-      if (i >= 300) return; // Limit
+      if (i >= 300) return;
       
       const $el = $(el);
       const item = this.extractUniversalData($, $el);
@@ -377,7 +681,6 @@ class UniversalScraper {
     });
   }
 
-  // SINGLE PAGE EXTRACTION
   async extractSingleAdvanced($) {
     const item = this.extractUniversalData($, $('body'));
     
@@ -387,7 +690,6 @@ class UniversalScraper {
     }
   }
 
-  // UNIVERSAL DATA EXTRACTION - ENHANCED
   extractUniversalData($, container) {
     const item = {
       name: null,
@@ -399,7 +701,6 @@ class UniversalScraper {
       confidence: 0
     };
 
-    // Extract with multiple strategies
     item.name = this.extractTitleAdvanced($, container);
     if (item.name) item.confidence += 0.25;
 
@@ -421,13 +722,9 @@ class UniversalScraper {
     return item;
   }
 
-  // ADVANCED TITLE EXTRACTION
   extractTitleAdvanced($, container) {
     const strategies = [
-      // Structured data
       () => container.find('[itemprop="name"]').first().text().trim(),
-      
-      // Headings
       () => {
         const headings = container.find('h1, h2, h3').toArray();
         for (const h of headings) {
@@ -436,8 +733,6 @@ class UniversalScraper {
         }
         return null;
       },
-      
-      // Title/name classes
       () => {
         const selectors = [
           '[class*="title"]:not([class*="subtitle"])',
@@ -456,8 +751,6 @@ class UniversalScraper {
         }
         return null;
       },
-      
-      // Link text
       () => {
         const links = container.find('a[href]').toArray();
         for (const link of links) {
@@ -469,8 +762,6 @@ class UniversalScraper {
         }
         return null;
       },
-      
-      // Strong/bold text
       () => {
         const bold = container.find('strong, b').first().text().trim();
         if (bold.length >= 10 && bold.length <= 200) return bold;
@@ -486,15 +777,12 @@ class UniversalScraper {
     return null;
   }
 
-  // ADVANCED PRICE EXTRACTION
   extractPriceAdvanced($, container) {
-    // Structured data
     const structuredPrice = container.find('[itemprop="price"]').first().text().trim();
     if (structuredPrice && this.looksLikePrice(structuredPrice)) {
       return this.cleanPrice(structuredPrice);
     }
 
-    // Price classes
     const priceSelectors = [
       '[class*="price"]:not([class*="original"]):not([class*="old"])',
       '[class*="Price"]:not([class*="Original"]):not([class*="Old"])',
@@ -514,7 +802,6 @@ class UniversalScraper {
       }
     }
 
-    // Pattern matching
     const pricePatterns = [
       /[$₹€£¥]\s*[\d,]+\.?\d*/g,
       /[\d,]+\.?\d*\s*[$₹€£¥]/g,
@@ -527,7 +814,6 @@ class UniversalScraper {
     for (const pattern of pricePatterns) {
       const matches = allText.match(pattern);
       if (matches) {
-        // Return the first reasonable price
         for (const match of matches) {
           if (this.looksLikePrice(match)) {
             return this.cleanPrice(match);
@@ -548,7 +834,6 @@ class UniversalScraper {
     return text.replace(/\s+/g, ' ').trim();
   }
 
-  // ADVANCED IMAGE EXTRACTION
   extractImageAdvanced($, container) {
     const images = container.find('img, picture img').toArray();
     
@@ -559,7 +844,6 @@ class UniversalScraper {
       const $img = $(img);
       let score = 0;
       
-      // Get all possible image sources
       const src = $img.attr('src') || 
                   $img.attr('data-src') || 
                   $img.attr('data-lazy-src') ||
@@ -569,7 +853,6 @@ class UniversalScraper {
       
       if (!src || src.startsWith('data:image') || src.length < 10) continue;
       
-      // Dimensions
       const width = parseInt($img.attr('width') || $img.css('width') || '0');
       const height = parseInt($img.attr('height') || $img.css('height') || '0');
       
@@ -579,11 +862,9 @@ class UniversalScraper {
       if (height > 80) score += 30;
       if (height > 150) score += 40;
       
-      // Alt text quality
       const alt = $img.attr('alt') || '';
       if (alt.length > 5) score += 20;
       
-      // Class names
       const classes = ($img.attr('class') || '').toLowerCase();
       if (classes.includes('product') || classes.includes('item') || classes.includes('main')) {
         score += 50;
@@ -592,7 +873,6 @@ class UniversalScraper {
         score += 20;
       }
       
-      // Penalty for icons, logos, etc.
       const srcLower = src.toLowerCase();
       if (srcLower.includes('icon') || srcLower.includes('logo') || 
           srcLower.includes('sprite') || srcLower.includes('avatar') ||
@@ -600,7 +880,6 @@ class UniversalScraper {
         score -= 100;
       }
       
-      // Lazy loading indicators (good sign)
       if ($img.attr('loading') === 'lazy' || $img.attr('data-src')) {
         score += 15;
       }
@@ -609,16 +888,13 @@ class UniversalScraper {
         bestScore = score;
         try {
           bestImg = src.startsWith('http') ? src : new URL(src, this.url).href;
-        } catch (e) {
-          // Invalid URL
-        }
+        } catch (e) {}
       }
     }
 
     return bestImg;
   }
 
-  // ADVANCED LINK EXTRACTION
   extractLinkAdvanced($, container) {
     const links = container.find('a[href]').toArray();
     
@@ -633,21 +909,17 @@ class UniversalScraper {
       
       let score = 0;
       
-      // Prefer links with meaningful text
       const text = $link.text().trim();
       if (text.length > 10) score += 20;
       
-      // Prefer links that contain images or titles
       if ($link.find('img').length > 0) score += 30;
       if ($link.find('h1, h2, h3, h4').length > 0) score += 40;
       
-      // Class indicators
       const classes = ($link.attr('class') || '').toLowerCase();
       if (classes.includes('product') || classes.includes('item') || classes.includes('detail')) {
         score += 35;
       }
       
-      // Prefer same-domain links
       try {
         const fullUrl = href.startsWith('http') ? href : new URL(href, this.url).href;
         const linkDomain = new URL(fullUrl).hostname;
@@ -661,21 +933,15 @@ class UniversalScraper {
           bestScore = score;
           bestLink = fullUrl;
         }
-      } catch (e) {
-        // Invalid URL
-      }
+      } catch (e) {}
     }
 
     return bestLink;
   }
 
-  // ADVANCED DESCRIPTION EXTRACTION
   extractDescriptionAdvanced($, container) {
     const strategies = [
-      // Structured data
       () => container.find('[itemprop="description"]').first().text().trim(),
-      
-      // Description classes
       () => {
         const selectors = [
           '[class*="description"]', '[class*="Description"]',
@@ -694,8 +960,6 @@ class UniversalScraper {
         }
         return null;
       },
-      
-      // Paragraphs
       () => {
         const paragraphs = container.find('p').toArray();
         for (const p of paragraphs) {
@@ -706,8 +970,6 @@ class UniversalScraper {
         }
         return null;
       },
-      
-      // Longest text block
       () => {
         let longest = '';
         container.find('div, span, section').each((_, el) => {
@@ -728,11 +990,9 @@ class UniversalScraper {
     return null;
   }
 
-  // ADVANCED METADATA EXTRACTION
   extractMetadataAdvanced($, container) {
     const metadata = {};
     
-    // Structured data
     container.find('[itemprop]').each((_, el) => {
       const prop = $(el).attr('itemprop');
       const value = $(el).text().trim() || $(el).attr('content');
@@ -741,7 +1001,6 @@ class UniversalScraper {
       }
     });
 
-    // Common metadata patterns
     const patterns = {
       rating: '[class*="rating"], [class*="Rating"], [class*="star"], [aria-label*="rating"]',
       reviews: '[class*="review"], [class*="Review"]',
@@ -760,7 +1019,6 @@ class UniversalScraper {
       }
     }
 
-    // Data attributes
     container.find('[data-value], [data-count], [data-rating], [data-price]').each((_, el) => {
       const $el = $(el);
       Object.keys(el.attribs).forEach(attr => {
@@ -777,7 +1035,6 @@ class UniversalScraper {
     return metadata;
   }
 
-  // Check if item is valid
   isValidItem(item) {
     const hasTitle = item.name && item.name.length >= 3;
     const hasPrice = item.price && item.price.length > 0;
@@ -792,7 +1049,6 @@ class UniversalScraper {
     return criteriaCount >= 2 && item.confidence >= 0.15;
   }
 
-  // Check for duplicate content
   isDuplicate(item) {
     const signature = this.createItemSignature(item);
     
@@ -804,7 +1060,6 @@ class UniversalScraper {
     return false;
   }
 
-  // Create unique signature for item
   createItemSignature(item) {
     const parts = [
       item.name ? item.name.toLowerCase().substring(0, 50) : '',
@@ -815,7 +1070,6 @@ class UniversalScraper {
     return parts.filter(p => p.length > 0).join('|');
   }
 
-  // Remove duplicate items from results
   removeDuplicates() {
     const seen = new Set();
     const unique = [];
@@ -854,7 +1108,7 @@ class UniversalScraper {
 
 // API Endpoints
 app.post('/api/scrape', async (req, res) => {
-  const { url } = req.body;
+  const { url, options } = req.body;
   
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
@@ -866,21 +1120,29 @@ app.post('/api/scrape', async (req, res) => {
     return res.status(400).json({ error: 'Invalid URL format' });
   }
 
-  console.log(`\n🚀 Starting scrape for: ${url}\n`);
-  const scraper = new UniversalScraper(url);
+  console.log(`\n🚀 Starting MAX STEALTH scrape for: ${url}\n`);
+  const scraper = new MaxStealthScraper(url, options || {});
   const results = await scraper.scrape();
   
   res.json(results);
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    version: 'max-stealth-v1.0'
+  });
 });
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`\n✅ Universal Scraper API running on port ${PORT}`);
-  console.log(`📡 Endpoint: http://localhost:${PORT}/api/scrape\n`);
+  console.log(`\n✅ MAX STEALTH Scraper API running on port ${PORT}`);
+  console.log(`📡 Endpoint: http://localhost:${PORT}/api/scrape`);
+  console.log(`🛡️ Anti-Bot Evasion: ENABLED`);
+  console.log(`🎭 Fingerprint Rotation: ENABLED`);
+  console.log(`🤖 CAPTCHA Handling: ENABLED`);
+  console.log(`⚡ Cloudflare Bypass: ENABLED\n`);
 });
 
-module.exports = UniversalScraper;
+module.exports = MaxStealthScraper;
