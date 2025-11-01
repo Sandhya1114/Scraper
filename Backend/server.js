@@ -1,1148 +1,805 @@
-// MAXIMUM STEALTH SCRAPER - server.js
-// Install: npm install express cheerio playwright playwright-extra puppeteer-extra-plugin-stealth puppeteer-extra-plugin-recaptcha axios proxy-chain user-agents
+// LinkedIn Profile Scraper - server.js (ADVANCED SELECTORS)
+// Install: npm install express playwright-extra puppeteer-extra-plugin-stealth cors dotenv
 
 const express = require('express');
-const cheerio = require('cheerio');
 const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
-const RecaptchaPlugin = require('puppeteer-extra-plugin-recaptcha');
 const cors = require('cors');
-const crypto = require('crypto');
-const UserAgent = require('user-agents');
+const path = require('path');
+require('dotenv').config();
 
 chromium.use(stealth);
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'],
+  credentials: true
+}));
+app.use(express.static('public'));
 
-class MaxStealthScraper {
-  constructor(url, options = {}) {
-    this.url = url;
-    this.domain = new URL(url).hostname;
-    this.options = {
-      maxRetries: 5,
-      solveRecaptcha: true,
-      bypassCloudflare: true,
-      rotateFingerprints: true,
-      antiDetection: true,
-      ...options
-    };
-    
-    this.seenContent = new Set();
-    this.sessionId = crypto.randomBytes(16).toString('hex');
-    this.requestHistory = [];
-    
-    this.results = {
-      success: false,
-      metadata: {
-        url: url,
-        pageType: 'unknown',
-        scrapedAt: new Date().toISOString(),
-        method: 'max-stealth',
-        domain: this.domain,
-        sessionId: this.sessionId,
-        evasionTechniques: []
-      },
-      items: [],
-      summary: {
-        totalItems: 0,
-        duplicatesRemoved: 0,
-        avgConfidence: 0,
-        warnings: [],
-        antiBot: {
-          captchaDetected: false,
-          captchaSolved: false,
-          rateLimitEvaded: false,
-          loginBypassed: false,
-          cloudflareBypassed: false,
-          fingerprintRotated: false
-        }
-      }
-    };
+class LinkedInScraper {
+  constructor() {
+    this.browser = null;
+    this.context = null;
+    this.page = null;
+    this.isLoggedIn = false;
+    this.loginInProgress = false;
   }
 
-  getRandomUserAgent() {
-    const userAgent = new UserAgent({ deviceCategory: 'desktop' });
-    return userAgent.toString();
+  async init() {
+    if (this.browser) return;
+
+    this.browser = await chromium.launch({
+      headless: false,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-dev-shm-usage',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+      ]
+    });
+
+    this.context = await this.browser.newContext({
+      viewport: { width: 1920, height: 1080 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      locale: 'en-IN',
+      timezoneId: 'Asia/Kolkata',
+      permissions: ['geolocation'],
+      geolocation: { latitude: 23.2599, longitude: 77.4126 },
+    });
+
+    await this.context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en'] });
+      window.chrome = { runtime: {} };
+    });
+
+    this.page = await this.context.newPage();
   }
 
-  async humanDelay(min = 500, max = 2000) {
-    const delay = Math.floor(Math.random() * (max - min + 1)) + min;
-    await new Promise(resolve => setTimeout(resolve, delay));
-  }
-
-  async simulateHumanBehavior(page) {
+  async login(email, password) {
     try {
-      // Natural mouse movements with bezier curves
-      const movements = Math.floor(Math.random() * 5) + 3;
-      for (let i = 0; i < movements; i++) {
-        const x = Math.floor(Math.random() * 1200) + 100;
-        const y = Math.floor(Math.random() * 800) + 100;
-        await page.mouse.move(x, y, { steps: Math.floor(Math.random() * 10) + 5 });
-        await this.humanDelay(100, 400);
-      }
-
-      // Random clicks on safe elements
-      try {
-        await page.evaluate(() => {
-          const safeElements = document.querySelectorAll('div, span, p');
-          if (safeElements.length > 0) {
-            const randomEl = safeElements[Math.floor(Math.random() * Math.min(10, safeElements.length))];
-            if (randomEl) randomEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-          }
-        });
-      } catch (e) {}
-
-      // Natural scrolling patterns
-      const scrolls = Math.floor(Math.random() * 3) + 2;
-      for (let i = 0; i < scrolls; i++) {
-        const scrollAmount = Math.floor(Math.random() * 300) + 100;
-        await page.evaluate((amount) => {
-          window.scrollBy({ top: amount, behavior: 'smooth' });
-        }, scrollAmount);
-        await this.humanDelay(800, 1500);
-      }
-
-      // Random pauses (reading simulation)
-      await this.humanDelay(1000, 3000);
-    } catch (error) {
-      console.log('⚠️ Human behavior simulation partial failure');
-    }
-  }
-
-  async bypassCloudflare(page) {
-    try {
-      console.log('🛡️ Checking for Cloudflare...');
+      this.loginInProgress = true;
+      console.log('🔐 Logging into LinkedIn...');
       
-      await page.waitForTimeout(3000);
-      
-      const isCloudflare = await page.evaluate(() => {
-        return document.title.includes('Just a moment') ||
-               document.body.innerText.includes('Checking your browser') ||
-               document.body.innerText.includes('DDoS protection by Cloudflare');
+      await this.page.goto('https://www.linkedin.com/login', { 
+        waitUntil: 'networkidle',
+        timeout: 60000 
       });
 
-      if (isCloudflare) {
-        console.log('🔄 Cloudflare detected, waiting for challenge...');
-        this.results.metadata.evasionTechniques.push('cloudflare-bypass');
-        this.results.summary.antiBot.cloudflareBypassed = true;
-        
-        // Wait for challenge to complete (up to 30 seconds)
-        await page.waitForTimeout(10000);
-        
-        // Check if passed
-        const stillBlocked = await page.evaluate(() => {
-          return document.title.includes('Just a moment');
-        });
-        
-        if (!stillBlocked) {
-          console.log('✅ Cloudflare bypassed');
-          return true;
-        } else {
-          console.log('⏳ Cloudflare still processing...');
-          await page.waitForTimeout(20000);
-        }
-      }
+      await this.randomDelay(2000, 3000);
+
+      await this.page.fill('#username', email);
+      await this.randomDelay(800, 1500);
+
+      await this.page.fill('#password', password);
+      await this.randomDelay(800, 1500);
+
+      await this.page.click('button[type="submit"]');
       
-      return true;
+      await this.page.waitForURL('**/feed/**', { timeout: 30000 }).catch(() => {});
+      await this.randomDelay(3000, 5000);
+
+      const currentUrl = this.page.url();
+      if (currentUrl.includes('/feed') || currentUrl.includes('/mynetwork')) {
+        this.isLoggedIn = true;
+        this.loginInProgress = false;
+        console.log('✅ Login successful!');
+        return true;
+      } else if (currentUrl.includes('/checkpoint/challenge')) {
+        console.log('⚠️  Security checkpoint detected - waiting for manual verification...');
+        console.log('👉 Please complete the verification in the browser window');
+        await this.page.waitForURL('**/feed/**', { timeout: 120000 }).catch(() => {});
+        this.isLoggedIn = true;
+        this.loginInProgress = false;
+        console.log('✅ Verification completed!');
+        return true;
+      } else {
+        console.log('❌ Login failed');
+        this.loginInProgress = false;
+        return false;
+      }
     } catch (error) {
-      console.log('⚠️ Cloudflare bypass attempt failed:', error.message);
+      console.error('❌ Login error:', error.message);
+      this.loginInProgress = false;
       return false;
     }
   }
 
-  async handleCaptcha(page) {
+  async scrapeProfile(profileUrl) {
     try {
-      console.log('🔍 Checking for CAPTCHA...');
+      if (!this.isLoggedIn) {
+        throw new Error('Not logged in');
+      }
+
+      console.log(`\n🔍 Scraping profile: ${profileUrl}`);
       
-      const hasCaptcha = await page.evaluate(() => {
-        const captchaIndicators = [
-          'g-recaptcha', 'h-captcha', 'recaptcha', 'captcha',
-          'data-sitekey', 'challenge-form'
-        ];
-        
-        const html = document.body.innerHTML.toLowerCase();
-        return captchaIndicators.some(indicator => html.includes(indicator));
+      await this.page.goto(profileUrl, { 
+        waitUntil: 'domcontentloaded',
+        timeout: 60000 
       });
 
-      if (hasCaptcha) {
-        console.log('🤖 CAPTCHA detected');
-        this.results.summary.antiBot.captchaDetected = true;
-        this.results.metadata.evasionTechniques.push('captcha-detected');
-        
-        // Try to find and solve reCAPTCHA
-        try {
-          const recaptchaFrame = page.frames().find(frame => 
-            frame.url().includes('google.com/recaptcha')
-          );
+      // Wait for main content
+      await this.page.waitForSelector('.pv-text-details__left-panel, .ph5', { timeout: 10000 }).catch(() => {});
+      await this.randomDelay(3000, 5000);
+      
+      // Advanced scrolling with button clicks
+      await this.advancedScroll();
+      
+      await this.randomDelay(2000, 3000);
+
+      const profileData = await this.page.evaluate(() => {
+        // ============================================
+        // ADVANCED SELECTOR SYSTEM
+        // ============================================
+
+        const utils = {
+          // Safe text extraction with multiple fallbacks
+          getText: (element) => {
+            if (!element) return null;
+            const text = (element.innerText || element.textContent || '').trim();
+            return text.length > 0 ? text : null;
+          },
+
+          // Try multiple selectors in order
+          trySelectors: (selectors) => {
+            for (const selector of selectors) {
+              const el = document.querySelector(selector);
+              if (el) {
+                const text = utils.getText(el);
+                if (text) return text;
+              }
+            }
+            return null;
+          },
+
+          // Get all matching elements' text
+          getAllText: (selectors) => {
+            const texts = new Set();
+            for (const selector of selectors) {
+              const elements = document.querySelectorAll(selector);
+              elements.forEach(el => {
+                const text = utils.getText(el);
+                if (text) texts.add(text);
+              });
+            }
+            return Array.from(texts);
+          },
+
+          // Find section container by ID
+          findSection: (sectionId) => {
+            const section = document.querySelector(`#${sectionId}`);
+            if (!section) return null;
+            
+            // Try multiple container patterns
+            return section.closest('section')?.querySelector('.pvs-list__outer-container') ||
+                   section.parentElement?.querySelector('.pvs-list') ||
+                   section.parentElement?.nextElementSibling?.querySelector('ul') ||
+                   section.parentElement?.querySelector('ul');
+          },
+
+          // Extract all visible text from spans
+          extractSpanTexts: (container) => {
+            const spans = container.querySelectorAll('span[aria-hidden="true"]');
+            return Array.from(spans)
+              .map(s => utils.getText(s))
+              .filter(t => t && t.length > 0);
+          }
+        };
+
+        // ============================================
+        // NAME EXTRACTION
+        // ============================================
+        const getName = () => {
+          const selectors = [
+            'h1.text-heading-xlarge',
+            'h1.inline.t-24.v-align-middle.break-words',
+            '.pv-text-details__left-panel h1',
+            '.ph5.pb5 h1',
+            'h1[class*="heading"]',
+            'div.ph5 h1'
+          ];
           
-          if (recaptchaFrame) {
-            console.log('🎯 Attempting CAPTCHA solve...');
-            // Wait for manual solve or automatic bypass
-            await page.waitForTimeout(15000);
-            
-            const solved = await page.evaluate(() => {
-              const response = document.querySelector('[name="g-recaptcha-response"]');
-              return response && response.value.length > 0;
-            });
-            
-            if (solved) {
-              console.log('✅ CAPTCHA solved');
-              this.results.summary.antiBot.captchaSolved = true;
-              this.results.metadata.evasionTechniques.push('captcha-solved');
+          let name = utils.trySelectors(selectors);
+          if (name) return name;
+
+          // Fallback: Find any h1 that looks like a name
+          const h1s = document.querySelectorAll('h1');
+          for (const h1 of h1s) {
+            const text = utils.getText(h1);
+            if (text && text.length > 2 && text.length < 100 && 
+                !text.toLowerCase().includes('linkedin') && 
+                !text.includes('|')) {
+              return text;
             }
           }
-        } catch (e) {
-          console.log('⚠️ CAPTCHA solve attempt failed');
-        }
-      }
-      
-      return !hasCaptcha;
-    } catch (error) {
-      console.log('⚠️ CAPTCHA check failed:', error.message);
-      return true;
-    }
-  }
 
-  async detectAntiBot(page) {
-    try {
-      const detections = await page.evaluate(() => {
-        const html = document.body.innerHTML.toLowerCase();
-        const text = document.body.innerText.toLowerCase();
-        
+          // Last resort: meta tag
+          const metaTitle = document.querySelector('meta[property="og:title"]');
+          if (metaTitle?.content) {
+            return metaTitle.content.split('|')[0].split('-')[0].trim();
+          }
+
+          return null;
+        };
+
+        // ============================================
+        // HEADLINE EXTRACTION
+        // ============================================
+        const getHeadline = () => {
+          const selectors = [
+            '.text-body-medium.break-words',
+            '.pv-text-details__left-panel .text-body-medium',
+            'div.text-body-medium',
+            '.pv-top-card--list .text-body-medium',
+            '[class*="headline"]',
+            '.pv-top-card-v2-section__info h2 + div'
+          ];
+          
+          const headline = utils.trySelectors(selectors);
+          
+          // Filter out if it looks like a location or connections
+          if (headline && headline.length > 10 && 
+              !headline.includes('connection') && 
+              !headline.match(/^\d+\s*connection/i)) {
+            return headline;
+          }
+
+          return null;
+        };
+
+        // ============================================
+        // LOCATION EXTRACTION
+        // ============================================
+        const getLocation = () => {
+          const selectors = [
+            '.text-body-small.inline.t-black--light.break-words',
+            '.pv-text-details__left-panel .text-body-small',
+            'span.text-body-small.inline',
+            '.pv-top-card--list .text-body-small'
+          ];
+          
+          const texts = utils.getAllText(selectors);
+          
+          // Find text that looks like a location (has comma or country names)
+          for (const text of texts) {
+            if (text.includes(',') || text.match(/India|USA|UK|Canada|Australia/i)) {
+              return text;
+            }
+          }
+
+          return texts.find(t => t.length > 3 && !t.includes('connection')) || null;
+        };
+
+        // ============================================
+        // ABOUT SECTION EXTRACTION
+        // ============================================
+        const getAbout = () => {
+          const aboutSection = utils.findSection('about');
+          if (!aboutSection) return null;
+
+          // Try multiple approaches
+          const selectors = [
+            'span[aria-hidden="true"]',
+            '.inline-show-more-text span[aria-hidden="true"]',
+            '.display-flex.ph5.pv3 span',
+            '.pvs-list__outer-container span'
+          ];
+
+          for (const selector of selectors) {
+            const span = aboutSection.querySelector(selector);
+            const text = utils.getText(span);
+            if (text && text.length > 20) return text;
+          }
+
+          // Get all text from about section
+          const allText = utils.getText(aboutSection);
+          if (allText && allText.length > 20) return allText;
+
+          return null;
+        };
+
+        // ============================================
+        // PROFILE IMAGE EXTRACTION
+        // ============================================
+        const getProfileImage = () => {
+          const selectors = [
+            '.pv-top-card-profile-picture__image',
+            'img[data-ghost-classes]',
+            '.pv-top-card__photo img',
+            'img.evi-image',
+            'img[class*="profile"]'
+          ];
+
+          for (const selector of selectors) {
+            const img = document.querySelector(selector);
+            if (img?.src && !img.src.includes('data:image')) {
+              return img.src;
+            }
+          }
+
+          return null;
+        };
+
+        // ============================================
+        // CONNECTIONS EXTRACTION
+        // ============================================
+        const getConnections = () => {
+          const selectors = [
+            '.pv-top-card--list-bullet li',
+            '.pvs-header__subtitle',
+            'span.t-bold span',
+            '.pv-top-card--list .text-body-small'
+          ];
+
+          const texts = utils.getAllText(selectors);
+          const connectionText = texts.find(t => t.toLowerCase().includes('connection'));
+          
+          return connectionText || null;
+        };
+
+        // ============================================
+        // EXPERIENCE SECTION EXTRACTION
+        // ============================================
+        const getExperience = () => {
+          const container = utils.findSection('experience');
+          if (!container) return [];
+
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li[class*="artdeco-list__item"]');
+          
+          return Array.from(items).map(item => {
+            const texts = utils.extractSpanTexts(item);
+            const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
+
+            // Smart parsing based on text patterns
+            let title = null, company = null, duration = null, location = null;
+
+            for (let i = 0; i < texts.length; i++) {
+              const text = texts[i];
+              
+              // Title is usually first and bold
+              if (!title && text.length > 2 && text.length < 150) {
+                title = text;
+              }
+              // Company name usually contains company indicators
+              else if (!company && (text.includes('·') || text.includes('•') || i === 1)) {
+                company = text.replace(/[·•]/g, '').trim();
+              }
+              // Duration contains date patterns
+              else if (!duration && text.match(/\d{4}|\d+\s*(yr|mo|year|month)/i)) {
+                duration = text;
+              }
+              // Location usually has comma or city names
+              else if (!location && (text.includes(',') || text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/))) {
+                location = text;
+              }
+            }
+
+            return {
+              title: title,
+              company: company,
+              duration: duration,
+              location: location,
+              description: description,
+              rawTexts: texts
+            };
+          })
+          .filter(exp => exp.title || exp.company)
+          .slice(0, 15);
+        };
+
+        // ============================================
+        // EDUCATION SECTION EXTRACTION
+        // ============================================
+        const getEducation = () => {
+          const container = utils.findSection('education');
+          if (!container) return [];
+
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li[class*="artdeco-list__item"]');
+          
+          return Array.from(items).map(item => {
+            const texts = utils.extractSpanTexts(item);
+
+            let school = null, degree = null, field = null, duration = null;
+
+            for (let i = 0; i < texts.length; i++) {
+              const text = texts[i];
+              
+              if (!school && i === 0) {
+                school = text;
+              }
+              else if (!degree && (text.includes('Bachelor') || text.includes('Master') || text.includes('PhD') || i === 1)) {
+                degree = text;
+              }
+              else if (!field && !text.match(/\d{4}/) && i === 2) {
+                field = text;
+              }
+              else if (!duration && text.match(/\d{4}/)) {
+                duration = text;
+              }
+            }
+
+            return {
+              school: school,
+              degree: degree,
+              field: field,
+              duration: duration,
+              rawTexts: texts
+            };
+          })
+          .filter(edu => edu.school)
+          .slice(0, 10);
+        };
+
+        // ============================================
+        // SKILLS SECTION EXTRACTION
+        // ============================================
+        const getSkills = () => {
+          const container = utils.findSection('skills');
+          if (!container) return [];
+
+          const selectors = [
+            '.mr1.hoverable-link-text.t-bold span[aria-hidden="true"]',
+            '.hoverable-link-text span[aria-hidden="true"]',
+            'a[href*="/skills/"] span[aria-hidden="true"]',
+            '.pvs-list__item--one-column span.t-bold'
+          ];
+
+          const skills = new Set();
+          
+          for (const selector of selectors) {
+            const elements = container.querySelectorAll(selector);
+            elements.forEach(el => {
+              const skill = utils.getText(el);
+              if (skill && skill.length > 1 && skill.length < 100) {
+                skills.add(skill);
+              }
+            });
+          }
+
+          return Array.from(skills).slice(0, 50);
+        };
+
+        // ============================================
+        // CERTIFICATIONS SECTION EXTRACTION
+        // ============================================
+        const getCertifications = () => {
+          const container = utils.findSection('licenses_and_certifications');
+          if (!container) return [];
+
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li[class*="artdeco-list__item"]');
+          
+          return Array.from(items).map(item => {
+            const texts = utils.extractSpanTexts(item);
+
+            return {
+              name: texts[0] || null,
+              issuer: texts[1] || null,
+              date: texts[2] || null,
+              credentialId: texts.find(t => t.toLowerCase().includes('credential')) || null,
+              rawTexts: texts
+            };
+          })
+          .filter(cert => cert.name)
+          .slice(0, 15);
+        };
+
+        // ============================================
+        // PROJECTS SECTION EXTRACTION
+        // ============================================
+        const getProjects = () => {
+          const container = utils.findSection('projects');
+          if (!container) return [];
+
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li[class*="artdeco-list__item"]');
+          
+          return Array.from(items).map(item => {
+            const texts = utils.extractSpanTexts(item);
+            const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
+
+            return {
+              name: texts[0] || null,
+              date: texts.find(t => t.match(/\d{4}/)) || null,
+              description: description,
+              rawTexts: texts
+            };
+          })
+          .filter(proj => proj.name)
+          .slice(0, 10);
+        };
+
+        // ============================================
+        // LANGUAGES SECTION EXTRACTION
+        // ============================================
+        const getLanguages = () => {
+          const container = utils.findSection('languages');
+          if (!container) return [];
+
+          const texts = utils.extractSpanTexts(container);
+          return texts.filter(t => t.length > 1 && t.length < 50).slice(0, 10);
+        };
+
+        // ============================================
+        // RETURN ALL DATA
+        // ============================================
         return {
-          rateLimit: text.includes('rate limit') || 
-                     text.includes('too many requests') ||
-                     text.includes('slow down'),
-          
-          loginRequired: text.includes('sign in') && text.includes('continue') ||
-                        text.includes('login required') ||
-                        html.includes('login-required'),
-          
-          blocked: text.includes('access denied') ||
-                   text.includes('forbidden') ||
-                   text.includes('blocked') ||
-                   document.title.includes('403') ||
-                   document.title.includes('blocked'),
-          
-          bot: text.includes('bot detected') ||
-               text.includes('automated') ||
-               text.includes('unusual activity')
+          name: getName(),
+          headline: getHeadline(),
+          location: getLocation(),
+          about: getAbout(),
+          profileImage: getProfileImage(),
+          connections: getConnections(),
+          experience: getExperience(),
+          education: getEducation(),
+          skills: getSkills(),
+          certifications: getCertifications(),
+          projects: getProjects(),
+          languages: getLanguages()
         };
       });
 
-      if (detections.rateLimit) {
-        console.log('⚠️ Rate limit detected');
-        this.results.summary.antiBot.rateLimitHit = true;
-        this.results.metadata.evasionTechniques.push('rate-limit-detected');
-      }
-      
-      if (detections.loginRequired) {
-        console.log('🔒 Login wall detected');
-        this.results.summary.antiBot.loginRequired = true;
-        this.results.metadata.evasionTechniques.push('login-wall-detected');
-      }
-      
-      if (detections.blocked) {
-        console.log('🚫 Access blocked');
-        this.results.summary.antiBot.blockDetected = true;
-        this.results.metadata.evasionTechniques.push('block-detected');
+      // Enhanced logging
+      console.log('\n✅ SCRAPING COMPLETED!');
+      console.log('═══════════════════════════════════════');
+      console.log(`📛 Name: ${profileData.name || '❌ NOT FOUND'}`);
+      console.log(`💼 Headline: ${profileData.headline || '❌ NOT FOUND'}`);
+      console.log(`📍 Location: ${profileData.location || '❌ NOT FOUND'}`);
+      console.log(`📝 About: ${profileData.about ? '✅ Found (' + profileData.about.length + ' chars)' : '❌ NOT FOUND'}`);
+      console.log(`🔗 Connections: ${profileData.connections || '❌ NOT FOUND'}`);
+      console.log(`💼 Experience: ${profileData.experience.length} entries`);
+      console.log(`🎓 Education: ${profileData.education.length} entries`);
+      console.log(`⚡ Skills: ${profileData.skills.length} skills`);
+      console.log(`🏆 Certifications: ${profileData.certifications.length} certifications`);
+      console.log(`🚀 Projects: ${profileData.projects.length} projects`);
+      console.log(`🌐 Languages: ${profileData.languages.length} languages`);
+      console.log('═══════════════════════════════════════\n');
+
+      // Log sample data for debugging
+      if (profileData.experience.length > 0) {
+        console.log('📊 First Experience Entry:');
+        console.log('   Title:', profileData.experience[0].title);
+        console.log('   Company:', profileData.experience[0].company);
+        console.log('   Raw texts:', profileData.experience[0].rawTexts);
       }
 
-      return detections;
+      if (profileData.education.length > 0) {
+        console.log('\n📊 First Education Entry:');
+        console.log('   School:', profileData.education[0].school);
+        console.log('   Degree:', profileData.education[0].degree);
+        console.log('   Raw texts:', profileData.education[0].rawTexts);
+      }
+
+      return {
+        success: true,
+        data: profileData,
+        scrapedAt: new Date().toISOString(),
+        profileUrl: profileUrl
+      };
+
     } catch (error) {
-      return { rateLimit: false, loginRequired: false, blocked: false, bot: false };
+      console.error('❌ Scraping error:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        profileUrl: profileUrl
+      };
     }
   }
 
-  async scrape() {
-    let browser;
-    let retries = 0;
+  async advancedScroll() {
+    console.log('📜 Advanced scrolling initiated...');
     
-    while (retries < this.options.maxRetries) {
+    // Phase 1: Initial slow scroll to trigger lazy loading
+    for (let i = 0; i < 5; i++) {
+      await this.page.evaluate((i) => {
+        window.scrollTo({
+          top: (i + 1) * (document.body.scrollHeight / 5),
+          behavior: 'smooth'
+        });
+      }, i);
+      await this.randomDelay(2000, 3000);
+    }
+
+    // Phase 2: Click "Show all" buttons
+    await this.randomDelay(1000, 2000);
+    const showButtons = await this.page.$$('button[aria-expanded="false"], button:has-text("Show all"), button:has-text("show more")').catch(() => []);
+    console.log(`   Found ${showButtons.length} expandable buttons`);
+    
+    for (let i = 0; i < Math.min(showButtons.length, 10); i++) {
       try {
-        console.log(`\n🚀 Attempt ${retries + 1}/${this.options.maxRetries} for: ${this.url}\n`);
-        
-        browser = await chromium.launch({
-          headless: false, // Set to true for production
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-dev-shm-usage',
-            '--disable-web-security',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--disable-site-isolation-trials',
-            '--allow-running-insecure-content',
-            '--disable-features=VizDisplayCompositor',
-            '--flag-switches-begin --disable-site-isolation-trials --flag-switches-end'
-          ]
-        });
-        
-        const userAgent = this.getRandomUserAgent();
-        console.log(`🎭 User Agent: ${userAgent.substring(0, 80)}...`);
-        
-        const context = await browser.newContext({
-          userAgent: userAgent,
-          viewport: { 
-            width: 1920 + Math.floor(Math.random() * 100), 
-            height: 1080 + Math.floor(Math.random() * 100) 
-          },
-          locale: 'en-US',
-          timezoneId: 'America/New_York',
-          permissions: ['geolocation'],
-          geolocation: { latitude: 40.7128, longitude: -74.0060 },
-          colorScheme: 'light',
-          deviceScaleFactor: 1,
-          hasTouch: false,
-          isMobile: false,
-          javaScriptEnabled: true,
-          extraHTTPHeaders: {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0'
-          }
-        });
-
-        // Add realistic browser fingerprint
-        await context.addInitScript(() => {
-          // Override navigator properties
-          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-          Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-          Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-          
-          // Add chrome object
-          window.chrome = { runtime: {} };
-          
-          // Override permissions
-          const originalQuery = window.navigator.permissions.query;
-          window.navigator.permissions.query = (parameters) => (
-            parameters.name === 'notifications' ?
-              Promise.resolve({ state: Notification.permission }) :
-              originalQuery(parameters)
-          );
-          
-          // Add realistic screen properties
-          Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
-          Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
-        });
-
-        const page = await context.newPage();
-        
-        // Random referer
-        const referers = [
-          'https://www.google.com/',
-          'https://www.bing.com/',
-          'https://duckduckgo.com/',
-          '',
-        ];
-        await page.setExtraHTTPHeaders({
-          'Referer': referers[Math.floor(Math.random() * referers.length)]
-        });
-        
-        console.log('🌐 Navigating to URL...');
-        
-        // Navigate with realistic behavior
-        await page.goto(this.url, { 
-          waitUntil: 'domcontentloaded',
-          timeout: 60000 
-        });
-        
-        await this.humanDelay(2000, 4000);
-        
-        // Handle Cloudflare
-        await this.bypassCloudflare(page);
-        
-        // Handle CAPTCHA
-        await this.handleCaptcha(page);
-        
-        // Detect anti-bot measures
-        const antiBot = await this.detectAntiBot(page);
-        
-        if (antiBot.blocked || antiBot.bot) {
-          throw new Error('Access blocked by anti-bot system');
-        }
-        
-        // Simulate human behavior
-        await this.simulateHumanBehavior(page);
-        
-        // Wait for content
-        await page.waitForLoadState('networkidle', { timeout: 30000 });
-        await this.humanDelay(2000, 3000);
-        
-        // Smart scrolling with randomization
-        console.log('📜 Loading dynamic content...');
-        const scrollCount = Math.floor(Math.random() * 5) + 8;
-        for (let i = 0; i < scrollCount; i++) {
-          const scrollAmount = window.innerHeight * (0.6 + Math.random() * 0.4);
-          await page.evaluate((amount) => {
-            window.scrollBy({ top: amount, behavior: 'smooth' });
-          }, scrollAmount);
-          await this.humanDelay(400, 900);
-          
-          // Random pause (reading simulation)
-          if (Math.random() > 0.7) {
-            await this.humanDelay(1500, 3000);
-          }
-        }
-        
-        // Scroll back to top
-        await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
-        await this.humanDelay(1000, 2000);
-
-        const html = await page.content();
-        const $ = cheerio.load(html);
-        
-        console.log('🔍 Analyzing page structure...');
-        
-        this.removeNoise($);
-        const analysis = this.analyzePageAdvanced($);
-        this.results.metadata.pageType = analysis.type;
-        
-        console.log(`📊 Detected: ${analysis.type} page with ${analysis.candidates.length} potential items`);
-        
-        if (analysis.type === 'listing') {
-          await this.extractListingAdvanced($, analysis);
-        } else {
-          await this.extractSingleAdvanced($);
-        }
-
-        this.removeDuplicates();
-        this.results.success = this.results.items.length > 0;
-        this.calculateSummary();
-        
-        console.log(`✅ Extracted ${this.results.items.length} unique items (${this.results.summary.duplicatesRemoved} duplicates removed)`);
-
-        await browser.close();
-        return this.results;
-
-      } catch (error) {
-        console.error(`❌ Attempt ${retries + 1} failed:`, error.message);
-        this.results.summary.warnings.push(`Attempt ${retries + 1}: ${error.message}`);
-        
-        if (browser) {
-          await browser.close().catch(() => {});
-        }
-        
-        retries++;
-        
-        if (retries < this.options.maxRetries) {
-          const waitTime = this.options.retryDelay * Math.pow(2, retries - 1);
-          console.log(`⏳ Waiting ${waitTime}ms before retry...`);
-          await this.humanDelay(waitTime, waitTime + 2000);
-        }
-      }
-    }
-    
-    this.results.summary.warnings.push('Max retries exceeded');
-    return this.results;
-  }
-
-  removeNoise($) {
-    const noiseSelectors = [
-      'script', 'style', 'noscript', 'iframe',
-      'nav', 'header:not([role="banner"])', 'footer',
-      '[class*="cookie"]', '[class*="banner"]', '[class*="popup"]',
-      '[class*="modal"]', '[class*="overlay"]', '[class*="advertisement"]',
-      '[class*="sidebar"]', '[class*="menu"]', '[id*="menu"]',
-      '[class*="navigation"]', '[class*="breadcrumb"]'
-    ];
-    noiseSelectors.forEach(sel => $(sel).remove());
-  }
-
-  analyzePageAdvanced($) {
-    const strategies = [
-      () => this.findByRepeatingPatterns($),
-      () => this.findBySemanticStructure($),
-      () => this.findByCommonContainers($),
-      () => this.findByDataAttributes($)
-    ];
-
-    let bestAnalysis = { type: 'single', candidates: [], score: 0 };
-
-    for (const strategy of strategies) {
-      const result = strategy();
-      if (result.score > bestAnalysis.score && result.candidates.length >= 2) {
-        bestAnalysis = result;
+        await showButtons[i].click({ timeout: 3000 });
+        await this.randomDelay(1500, 2500);
+      } catch (e) {
+        // Button not clickable or already expanded
       }
     }
 
-    if (bestAnalysis.candidates.length >= 2) {
-      bestAnalysis.type = 'listing';
-    }
-
-    return bestAnalysis;
-  }
-
-  findByRepeatingPatterns($) {
-    const elementGroups = new Map();
-    const potentialItems = $('article, [class*="item"], [class*="card"], [class*="product"], [class*="listing"], [class*="result"], [data-testid], [data-item]');
-    
-    potentialItems.each((_, el) => {
-      const $el = $(el);
-      const signature = this.createElementSignature($, el);
-      if (!elementGroups.has(signature)) {
-        elementGroups.set(signature, []);
-      }
-      elementGroups.get(signature).push(el);
+    // Phase 3: Scroll to bottom
+    await this.page.evaluate(() => {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
     });
+    await this.randomDelay(2000, 3000);
 
-    let bestGroup = [];
-    let bestScore = 0;
-
-    for (const [sig, elements] of elementGroups) {
-      if (elements.length >= 2) {
-        const score = this.scoreElementGroup($, elements);
-        if (score > bestScore || (score >= bestScore * 0.9 && elements.length > bestGroup.length)) {
-          bestScore = score;
-          bestGroup = elements;
-        }
-      }
-    }
-
-    return { candidates: bestGroup, score: bestScore, type: bestGroup.length >= 2 ? 'listing' : 'single' };
-  }
-
-  findBySemanticStructure($) {
-    const semanticSelectors = [
-      'article', '[itemtype]', '[itemscope]',
-      'li[class*="item"]', 'li[class*="product"]', 'li[class*="card"]',
-      'div[class*="item"]', 'div[class*="product"]', 'div[class*="card"]',
-      '[role="article"]', '[role="listitem"]'
-    ];
-
-    let bestElements = [];
-    let bestScore = 0;
-
-    for (const selector of semanticSelectors) {
-      const elements = $(selector).toArray();
-      if (elements.length >= 2) {
-        const score = this.scoreElementGroup($, elements);
-        if (score > bestScore) {
-          bestScore = score;
-          bestElements = elements;
-        }
-      }
-    }
-
-    return { candidates: bestElements, score: bestScore };
-  }
-
-  findByCommonContainers($) {
-    let bestElements = [];
-    let bestScore = 0;
-
-    $('body *').each((_, parent) => {
-      const $parent = $(parent);
-      const children = $parent.children();
-      
-      if (children.length >= 2 && children.length <= 500) {
-        const similarity = this.checkChildrenSimilarity($, children);
-        
-        if (similarity > 0.6) {
-          const score = this.scoreElementGroup($, children.toArray());
-          
-          if (score > bestScore && children.length >= 2) {
-            bestScore = score;
-            bestElements = children.toArray();
-          }
-        }
-      }
+    // Phase 4: Scroll back to top
+    await this.page.evaluate(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     });
+    await this.randomDelay(2000, 3000);
 
-    return { candidates: bestElements, score: bestScore };
-  }
-
-  findByDataAttributes($) {
-    const dataSelectors = [
-      '[data-product-id]', '[data-item-id]', '[data-id]',
-      '[data-component-type="product"]', '[data-component-type="item"]',
-      '[data-test*="item"]', '[data-test*="product"]', '[data-test*="card"]'
-    ];
-
-    let bestElements = [];
-    let bestScore = 0;
-
-    for (const selector of dataSelectors) {
-      const elements = $(selector).toArray();
-      if (elements.length >= 2) {
-        const score = this.scoreElementGroup($, elements);
-        if (score > bestScore) {
-          bestScore = score;
-          bestElements = elements;
-        }
-      }
-    }
-
-    return { candidates: bestElements, score: bestScore };
-  }
-
-  createElementSignature($, el) {
-    const $el = $(el);
-    const tag = el.name;
-    const classes = ($el.attr('class') || '').split(/\s+/).filter(c => 
-      c.length > 2 && !c.match(/^(active|selected|hidden|visible|\d+)$/i)
-    );
-    return `${tag}:${classes.sort().slice(0, 3).join('.')}`;
-  }
-
-  scoreElementGroup($, elements) {
-    if (elements.length === 0) return 0;
-    
-    let totalScore = 0;
-    const sample = elements.slice(0, Math.min(5, elements.length));
-    
-    sample.forEach(el => {
-      const $el = $(el);
-      let score = 0;
-      
-      if ($el.find('img, picture').length > 0) score += 25;
-      if ($el.find('a[href]').length > 0) score += 20;
-      if ($el.find('h1, h2, h3, h4, h5, h6').length > 0) score += 30;
-      
-      const priceSelectors = '[class*="price"], [class*="cost"], [class*="amount"], [itemprop="price"]';
-      if ($el.find(priceSelectors).length > 0) score += 35;
-      
-      const titleSelectors = '[class*="title"], [class*="name"], [class*="heading"]';
-      if ($el.find(titleSelectors).length > 0) score += 25;
-      
-      if ($el.find('p, [class*="desc"], [class*="detail"]').length > 0) score += 15;
-      
-      const text = $el.text().trim();
-      if (text.length > 30) score += 15;
-      if (text.length > 100) score += 15;
-      
-      if ($el.attr('data-id') || $el.attr('data-item-id') || $el.attr('data-product-id')) score += 20;
-      if ($el.attr('itemscope') || $el.attr('itemtype')) score += 25;
-      
-      totalScore += score;
-    });
-    
-    return totalScore / sample.length;
-  }
-
-  checkChildrenSimilarity($, children) {
-    if (children.length < 2) return 0;
-    
-    const first = $(children[0]);
-    const structure = {
-      tagName: children[0].name,
-      hasImg: first.find('img, picture').length > 0,
-      hasLink: first.find('a[href]').length > 0,
-      hasHeading: first.find('h1, h2, h3, h4, h5, h6').length > 0,
-      hasPrice: first.find('[class*="price"], [class*="cost"]').length > 0,
-      childCount: first.children().length,
-      textLength: first.text().trim().length
-    };
-
-    let similarCount = 0;
-    const sample = children.slice(1, Math.min(children.length, 15));
-    
-    sample.each((_, child) => {
-      const $child = $(child);
-      const matches = [
-        child.name === structure.tagName,
-        ($child.find('img, picture').length > 0) === structure.hasImg,
-        ($child.find('a[href]').length > 0) === structure.hasLink,
-        ($child.find('h1, h2, h3, h4, h5, h6').length > 0) === structure.hasHeading,
-        Math.abs($child.children().length - structure.childCount) <= 4,
-        Math.abs($child.text().trim().length - structure.textLength) < structure.textLength * 0.6
-      ];
-      
-      const matchCount = matches.filter(m => m).length;
-      if (matchCount >= 4) similarCount++;
-    });
-
-    return similarCount / sample.length;
-  }
-
-  async extractListingAdvanced($, analysis) {
-    const candidates = analysis.candidates || [];
-    console.log(`🔄 Processing ${candidates.length} candidate items...`);
-
-    candidates.forEach((el, i) => {
-      if (i >= 300) return;
-      
-      const $el = $(el);
-      const item = this.extractUniversalData($, $el);
-      
-      if (this.isValidItem(item) && !this.isDuplicate(item)) {
-        item.id = `item_${i + 1}`;
-        this.results.items.push(item);
-      }
-    });
-  }
-
-  async extractSingleAdvanced($) {
-    const item = this.extractUniversalData($, $('body'));
-    
-    if (this.isValidItem(item)) {
-      item.id = 'single_item';
-      this.results.items = [item];
-    }
-  }
-
-  extractUniversalData($, container) {
-    const item = {
-      name: null,
-      price: null,
-      description: null,
-      image: null,
-      link: null,
-      metadata: {},
-      confidence: 0
-    };
-
-    item.name = this.extractTitleAdvanced($, container);
-    if (item.name) item.confidence += 0.25;
-
-    item.price = this.extractPriceAdvanced($, container);
-    if (item.price) item.confidence += 0.2;
-
-    item.image = this.extractImageAdvanced($, container);
-    if (item.image) item.confidence += 0.15;
-
-    item.link = this.extractLinkAdvanced($, container);
-    if (item.link) item.confidence += 0.1;
-
-    item.description = this.extractDescriptionAdvanced($, container);
-    if (item.description) item.confidence += 0.15;
-
-    item.metadata = this.extractMetadataAdvanced($, container);
-    if (Object.keys(item.metadata).length > 0) item.confidence += 0.15;
-
-    return item;
-  }
-
-  extractTitleAdvanced($, container) {
-    const strategies = [
-      () => container.find('[itemprop="name"]').first().text().trim(),
-      () => {
-        const headings = container.find('h1, h2, h3').toArray();
-        for (const h of headings) {
-          const text = $(h).clone().children('span, small').remove().end().text().trim();
-          if (text.length >= 5 && text.length <= 300) return text;
-        }
-        return null;
-      },
-      () => {
-        const selectors = [
-          '[class*="title"]:not([class*="subtitle"])',
-          '[class*="Title"]:not([class*="Subtitle"])',
-          '[class*="name"]:not([class*="username"])',
-          '[class*="Name"]:not([class*="Username"])',
-          '[class*="heading"]',
-          '[data-testid*="title"]',
-          '[data-testid*="name"]',
-          '[aria-label*="title"]'
-        ];
-        
-        for (const sel of selectors) {
-          const text = container.find(sel).first().clone().children().remove().end().text().trim();
-          if (text.length >= 5 && text.length <= 300) return text;
-        }
-        return null;
-      },
-      () => {
-        const links = container.find('a[href]').toArray();
-        for (const link of links) {
-          const text = $(link).clone().children('span').remove().end().text().trim();
-          if (text.length >= 10 && text.length <= 200 && 
-              !text.match(/^(click|view|read|more|see|learn|shop|buy)/i)) {
-            return text;
-          }
-        }
-        return null;
-      },
-      () => {
-        const bold = container.find('strong, b').first().text().trim();
-        if (bold.length >= 10 && bold.length <= 200) return bold;
-        return null;
-      }
-    ];
-
-    for (const strategy of strategies) {
-      const result = strategy();
-      if (result) return result;
-    }
-
-    return null;
-  }
-
-  extractPriceAdvanced($, container) {
-    const structuredPrice = container.find('[itemprop="price"]').first().text().trim();
-    if (structuredPrice && this.looksLikePrice(structuredPrice)) {
-      return this.cleanPrice(structuredPrice);
-    }
-
-    const priceSelectors = [
-      '[class*="price"]:not([class*="original"]):not([class*="old"])',
-      '[class*="Price"]:not([class*="Original"]):not([class*="Old"])',
-      '[class*="cost"]', '[class*="Cost"]',
-      '[class*="amount"]', '[class*="Amount"]',
-      '[data-testid*="price"]',
-      '[aria-label*="price"]'
-    ];
-    
-    for (const sel of priceSelectors) {
-      const elements = container.find(sel).toArray();
-      for (const el of elements) {
-        const text = $(el).text().trim();
-        if (this.looksLikePrice(text)) {
-          return this.cleanPrice(text);
-        }
-      }
-    }
-
-    const pricePatterns = [
-      /[$₹€£¥]\s*[\d,]+\.?\d*/g,
-      /[\d,]+\.?\d*\s*[$₹€£¥]/g,
-      /(?:USD|INR|EUR|GBP|CAD|AUD)\s*[\d,]+\.?\d*/gi,
-      /[\d,]+\.?\d*\s*(?:USD|INR|EUR|GBP|CAD|AUD)/gi,
-      /(?:Rs\.?|INR|₹)\s*[\d,]+\.?\d*/gi
-    ];
-
-    const allText = container.text();
-    for (const pattern of pricePatterns) {
-      const matches = allText.match(pattern);
-      if (matches) {
-        for (const match of matches) {
-          if (this.looksLikePrice(match)) {
-            return this.cleanPrice(match);
-          }
-        }
-      }
-    }
-
-    return null;
-  }
-
-  looksLikePrice(text) {
-    return /[$₹€£¥]|\d+[.,]\d{2}|(?:USD|INR|EUR|GBP|Rs)/i.test(text) &&
-           parseFloat(text.replace(/[^0-9.]/g, '')) > 0;
-  }
-
-  cleanPrice(text) {
-    return text.replace(/\s+/g, ' ').trim();
-  }
-
-  extractImageAdvanced($, container) {
-    const images = container.find('img, picture img').toArray();
-    
-    let bestImg = null;
-    let bestScore = -1000;
-
-    for (const img of images) {
-      const $img = $(img);
-      let score = 0;
-      
-      const src = $img.attr('src') || 
-                  $img.attr('data-src') || 
-                  $img.attr('data-lazy-src') ||
-                  $img.attr('data-original') || 
-                  $img.attr('data-lazy') ||
-                  ($img.attr('srcset') || '').split(',')[0].split(' ')[0];
-      
-      if (!src || src.startsWith('data:image') || src.length < 10) continue;
-      
-      const width = parseInt($img.attr('width') || $img.css('width') || '0');
-      const height = parseInt($img.attr('height') || $img.css('height') || '0');
-      
-      if (width > 80) score += 30;
-      if (width > 150) score += 40;
-      if (width > 250) score += 50;
-      if (height > 80) score += 30;
-      if (height > 150) score += 40;
-      
-      const alt = $img.attr('alt') || '';
-      if (alt.length > 5) score += 20;
-      
-      const classes = ($img.attr('class') || '').toLowerCase();
-      if (classes.includes('product') || classes.includes('item') || classes.includes('main')) {
-        score += 50;
-      }
-      if (classes.includes('thumbnail') || classes.includes('thumb')) {
-        score += 20;
-      }
-      
-      const srcLower = src.toLowerCase();
-      if (srcLower.includes('icon') || srcLower.includes('logo') || 
-          srcLower.includes('sprite') || srcLower.includes('avatar') ||
-          srcLower.includes('placeholder')) {
-        score -= 100;
-      }
-      
-      if ($img.attr('loading') === 'lazy' || $img.attr('data-src')) {
-        score += 15;
-      }
-      
-      if (score > bestScore) {
-        bestScore = score;
-        try {
-          bestImg = src.startsWith('http') ? src : new URL(src, this.url).href;
-        } catch (e) {}
-      }
-    }
-
-    return bestImg;
-  }
-
-  extractLinkAdvanced($, container) {
-    const links = container.find('a[href]').toArray();
-    
-    let bestLink = null;
-    let bestScore = 0;
-
-    for (const link of links) {
-      const $link = $(link);
-      const href = $link.attr('href');
-      
-      if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) continue;
-      
-      let score = 0;
-      
-      const text = $link.text().trim();
-      if (text.length > 10) score += 20;
-      
-      if ($link.find('img').length > 0) score += 30;
-      if ($link.find('h1, h2, h3, h4').length > 0) score += 40;
-      
-      const classes = ($link.attr('class') || '').toLowerCase();
-      if (classes.includes('product') || classes.includes('item') || classes.includes('detail')) {
-        score += 35;
-      }
-      
+    // Phase 5: One more pass through sections
+    const sections = ['experience', 'education', 'skills', 'licenses_and_certifications'];
+    for (const section of sections) {
       try {
-        const fullUrl = href.startsWith('http') ? href : new URL(href, this.url).href;
-        const linkDomain = new URL(fullUrl).hostname;
-        const baseDomain = this.domain.split('.').slice(-2).join('.');
-        
-        if (linkDomain.includes(baseDomain)) {
-          score += 25;
-        }
-        
-        if (score > bestScore) {
-          bestScore = score;
-          bestLink = fullUrl;
-        }
-      } catch (e) {}
-    }
-
-    return bestLink;
-  }
-
-  extractDescriptionAdvanced($, container) {
-    const strategies = [
-      () => container.find('[itemprop="description"]').first().text().trim(),
-      () => {
-        const selectors = [
-          '[class*="description"]', '[class*="Description"]',
-          '[class*="desc"]', '[class*="Desc"]',
-          '[class*="summary"]', '[class*="Summary"]',
-          '[class*="detail"]', '[class*="Detail"]',
-          '[class*="content"]', '[class*="Content"]',
-          '[data-testid*="description"]'
-        ];
-        
-        for (const sel of selectors) {
-          const text = container.find(sel).first().text().trim();
-          if (text.length >= 30 && text.length <= 2000) {
-            return text.substring(0, 800);
-          }
-        }
-        return null;
-      },
-      () => {
-        const paragraphs = container.find('p').toArray();
-        for (const p of paragraphs) {
-          const text = $(p).text().trim();
-          if (text.length >= 30 && text.length <= 2000) {
-            return text.substring(0, 800);
-          }
-        }
-        return null;
-      },
-      () => {
-        let longest = '';
-        container.find('div, span, section').each((_, el) => {
-          const text = $(el).clone().children().remove().end().text().trim();
-          if (text.length > longest.length && text.length >= 40 && text.length <= 2000) {
-            longest = text;
-          }
-        });
-        return longest ? longest.substring(0, 800) : null;
-      }
-    ];
-
-    for (const strategy of strategies) {
-      const result = strategy();
-      if (result) return result;
-    }
-
-    return null;
-  }
-
-  extractMetadataAdvanced($, container) {
-    const metadata = {};
-    
-    container.find('[itemprop]').each((_, el) => {
-      const prop = $(el).attr('itemprop');
-      const value = $(el).text().trim() || $(el).attr('content');
-      if (value && value.length < 200 && !metadata[prop]) {
-        metadata[prop] = value;
-      }
-    });
-
-    const patterns = {
-      rating: '[class*="rating"], [class*="Rating"], [class*="star"], [aria-label*="rating"]',
-      reviews: '[class*="review"], [class*="Review"]',
-      availability: '[class*="stock"], [class*="Stock"], [class*="available"], [class*="Available"]',
-      brand: '[class*="brand"], [class*="Brand"], [itemprop="brand"]',
-      category: '[class*="category"], [class*="Category"], [class*="type"]',
-      sku: '[class*="sku"], [class*="SKU"], [class*="product-id"]'
-    };
-
-    for (const [key, selector] of Object.entries(patterns)) {
-      if (!metadata[key]) {
-        const value = container.find(selector).first().text().trim();
-        if (value && value.length > 0 && value.length < 200) {
-          metadata[key] = value;
-        }
+        await this.page.evaluate((sectionId) => {
+          const el = document.querySelector(`#${sectionId}`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, section);
+        await this.randomDelay(1500, 2000);
+      } catch (e) {
+        // Section not found
       }
     }
 
-    container.find('[data-value], [data-count], [data-rating], [data-price]').each((_, el) => {
-      const $el = $(el);
-      Object.keys(el.attribs).forEach(attr => {
-        if (attr.startsWith('data-') && !attr.includes('test') && !attr.includes('id')) {
-          const key = attr.replace('data-', '').replace(/-/g, '_');
-          const value = $el.attr(attr);
-          if (value && value.length < 150 && !metadata[key]) {
-            metadata[key] = value;
-          }
-        }
-      });
-    });
-
-    return metadata;
+    console.log('✅ Advanced scrolling completed');
   }
 
-  isValidItem(item) {
-    const hasTitle = item.name && item.name.length >= 3;
-    const hasPrice = item.price && item.price.length > 0;
-    const hasImage = item.image && item.image.length > 0;
-    const hasDescription = item.description && item.description.length >= 20;
-    const hasLink = item.link && item.link.length > 0;
-    const hasMetadata = Object.keys(item.metadata).length > 0;
-    
-    const criteriaCount = [hasTitle, hasPrice, hasImage, hasDescription, hasLink, hasMetadata]
-      .filter(Boolean).length;
-    
-    return criteriaCount >= 2 && item.confidence >= 0.15;
+  async randomDelay(min, max) {
+    const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+    await new Promise(resolve => setTimeout(resolve, delay));
   }
 
-  isDuplicate(item) {
-    const signature = this.createItemSignature(item);
-    
-    if (this.seenContent.has(signature)) {
-      return true;
-    }
-    
-    this.seenContent.add(signature);
-    return false;
-  }
-
-  createItemSignature(item) {
-    const parts = [
-      item.name ? item.name.toLowerCase().substring(0, 50) : '',
-      item.price ? item.price.replace(/\s/g, '') : '',
-      item.link ? item.link : ''
-    ];
-    
-    return parts.filter(p => p.length > 0).join('|');
-  }
-
-  removeDuplicates() {
-    const seen = new Set();
-    const unique = [];
-    let duplicateCount = 0;
-
-    for (const item of this.results.items) {
-      const sig = this.createItemSignature(item);
-      if (!seen.has(sig)) {
-        seen.add(sig);
-        unique.push(item);
-      } else {
-        duplicateCount++;
-      }
-    }
-
-    this.results.items = unique;
-    this.results.summary.duplicatesRemoved = duplicateCount;
-  }
-
-  calculateSummary() {
-    this.results.summary.totalItems = this.results.items.length;
-    
-    if (this.results.items.length > 0) {
-      const avgConf = this.results.items.reduce((sum, item) => 
-        sum + (item.confidence || 0), 0) / this.results.items.length;
-      this.results.summary.avgConfidence = parseFloat(avgConf.toFixed(2));
-    }
-
-    if (this.results.items.length === 0) {
-      this.results.summary.warnings.push('No structured data found - page may require login or have anti-bot protection');
-    } else if (this.results.summary.avgConfidence < 0.3) {
-      this.results.summary.warnings.push('Low confidence scores - extracted data may be incomplete');
+  async close() {
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
+      this.context = null;
+      this.page = null;
+      this.isLoggedIn = false;
+      this.loginInProgress = false;
     }
   }
 }
 
-// API Endpoints
-app.post('/api/scrape', async (req, res) => {
-  const { url, options } = req.body;
+let scraper = null;
+let loginStatus = {
+  isLoggedIn: false,
+  loginInProgress: false,
+  error: null
+};
+
+const startAutoScraper = async () => {
+  await new Promise(resolve => setTimeout(resolve, 2000));
   
-  if (!url) {
-    return res.status(400).json({ error: 'URL is required' });
+  const email = process.env.LINKEDIN_EMAIL;
+  const password = process.env.LINKEDIN_PASSWORD;
+
+  if (!email || !password) {
+    console.log('\n⚠️  Missing credentials in .env file');
+    console.log('Please add:\nLINKEDIN_EMAIL=your_email@example.com\nLINKEDIN_PASSWORD=your_password\n');
+    loginStatus.error = 'Missing credentials in .env file';
+    return;
   }
+
+  console.log('\n🚀 AUTO-LOGIN MODE ENABLED');
+  console.log('📧 Email:', email);
+  console.log('🔑 Password: ' + '*'.repeat(password.length) + '\n');
 
   try {
-    new URL(url);
-  } catch {
-    return res.status(400).json({ error: 'Invalid URL format' });
-  }
+    loginStatus.loginInProgress = true;
+    scraper = new LinkedInScraper();
+    await scraper.init();
 
-  console.log(`\n🚀 Starting MAX STEALTH scrape for: ${url}\n`);
-  const scraper = new MaxStealthScraper(url, options || {});
-  const results = await scraper.scrape();
-  
-  res.json(results);
+    console.log('⏳ Logging in...');
+    const loginSuccess = await scraper.login(email, password);
+
+    if (loginSuccess) {
+      loginStatus.isLoggedIn = true;
+      loginStatus.loginInProgress = false;
+      loginStatus.error = null;
+      console.log('\n✅ AUTO-LOGIN COMPLETED!');
+      console.log('🎯 Ready to scrape profiles!');
+      console.log('\n📌 Open the UI: http://localhost:3001');
+      console.log('📌 Or use API: POST http://localhost:3001/api/scrape-profile\n');
+    } else {
+      loginStatus.isLoggedIn = false;
+      loginStatus.loginInProgress = false;
+      loginStatus.error = 'Login failed - check credentials';
+      console.log('\n❌ Auto-login failed. Please check credentials.\n');
+    }
+  } catch (error) {
+    loginStatus.isLoggedIn = false;
+    loginStatus.loginInProgress = false;
+    loginStatus.error = error.message;
+    console.error('\n❌ Auto-login error:', error.message);
+  }
+};
+
+// API Endpoints
+app.post('/api/scrape-profile', async (req, res) => {
+  try {
+    const { profileUrl } = req.body;
+
+    if (!profileUrl) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Profile URL is required' 
+      });
+    }
+
+    if (!scraper || !scraper.isLoggedIn) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Not logged in - please restart server to auto-login' 
+      });
+    }
+
+    const result = await scraper.scrapeProfile(profileUrl);
+    res.json(result);
+
+  } catch (error) {
+    console.error('Scrape endpoint error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+app.get('/api/status', (req, res) => {
+  res.json({
+    success: true,
+    loggedIn: scraper ? scraper.isLoggedIn : false,
+    loginInProgress: scraper ? scraper.loginInProgress : loginStatus.loginInProgress,
+    error: loginStatus.error,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post('/api/logout', async (req, res) => {
+  try {
+    if (scraper) {
+      await scraper.close();
+      scraper = null;
+    }
+    loginStatus = {
+      isLoggedIn: false,
+      loginInProgress: false,
+      error: null
+    };
+    res.json({ success: true, message: 'Logged out successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    timestamp: new Date().toISOString(),
-    version: 'max-stealth-v1.0'
+    service: 'linkedin-scraper',
+    version: '3.0.0-advanced',
+    loginStatus: loginStatus
   });
+});
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+process.on('SIGINT', async () => {
+  console.log('\n🛑 Shutting down...');
+  if (scraper) {
+    await scraper.close();
+  }
+  process.exit(0);
 });
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`\n✅ MAX STEALTH Scraper API running on port ${PORT}`);
-  console.log(`📡 Endpoint: http://localhost:${PORT}/api/scrape`);
-  console.log(`🛡️ Anti-Bot Evasion: ENABLED`);
-  console.log(`🎭 Fingerprint Rotation: ENABLED`);
-  console.log(`🤖 CAPTCHA Handling: ENABLED`);
-  console.log(`⚡ Cloudflare Bypass: ENABLED\n`);
+  console.log(`\n✅ LinkedIn Scraper API running on port ${PORT}`);
+  console.log(`🌐 Open: http://localhost:${PORT}\n`);
+  startAutoScraper();
 });
-
-module.exports = MaxStealthScraper;

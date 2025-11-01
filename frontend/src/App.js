@@ -1,21 +1,80 @@
-// App.jsx
-import React, { useState } from 'react';
-import { Search, Loader2, AlertCircle, Download, ExternalLink, Globe, Database, CheckCircle, XCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, Search, Download, CheckCircle, XCircle, Loader2, AlertCircle, Clock, RefreshCw } from 'lucide-react';
 import './App.css';
 
 const App = () => {
-  const [url, setUrl] = useState('');
+  const [profileUrl, setProfileUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loginInProgress, setLoginInProgress] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [statusCheckCount, setStatusCheckCount] = useState(0);
 
-  const API_URL = 'http://localhost:3001/api/scrape';
+  const API_URL = 'http://localhost:3001';
 
-  const handleScrape = async (e) => {
-    e.preventDefault();
-    
-    if (!url.trim()) {
-      setError('Please enter a valid URL');
+  // Check login status on mount and retry if login is in progress
+  useEffect(() => {
+    checkStatus();
+  }, []);
+
+  // Retry status check if login is in progress
+  useEffect(() => {
+    if (loginInProgress && statusCheckCount < 20) {
+      const timer = setTimeout(() => {
+        console.log('Login in progress, checking again...');
+        setStatusCheckCount(prev => prev + 1);
+        checkStatus();
+      }, 3000); // Check every 3 seconds
+      return () => clearTimeout(timer);
+    }
+  }, [loginInProgress, statusCheckCount]);
+
+  const checkStatus = async () => {
+    try {
+      console.log('Checking status...');
+      const response = await fetch(`${API_URL}/api/status`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        // Add timeout to prevent hanging
+        signal: AbortSignal.timeout(10000)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('Status response:', data);
+      
+      setIsLoggedIn(data.loggedIn);
+      setLoginInProgress(data.loginInProgress || false);
+      
+      if (!data.loggedIn && !data.loginInProgress) {
+        setError(data.error || 'Backend is running but not logged in. Please check server logs.');
+      } else if (data.loginInProgress) {
+        setError(null);
+      } else if (data.loggedIn) {
+        setError(null);
+        setStatusCheckCount(0); // Reset counter on successful login
+      }
+      
+      setStatusLoading(false);
+    } catch (err) {
+      console.error('Status check failed:', err);
+      setError(`Cannot connect to backend: ${err.message}. Make sure server is running on http://localhost:3001`);
+      setIsLoggedIn(false);
+      setLoginInProgress(false);
+      setStatusLoading(false);
+    }
+  };
+
+  const handleScrape = async () => {
+    if (!profileUrl.trim()) {
+      setError('Please enter a valid LinkedIn profile URL');
       return;
     }
 
@@ -24,284 +83,297 @@ const App = () => {
     setResult(null);
 
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetch(`${API_URL}/api/scrape-profile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url })
+        body: JSON.stringify({ profileUrl })
       });
 
-      if (!response.ok) throw new Error('Scraping failed');
-      
       const data = await response.json();
-      setResult(data);
+
+      if (data.success) {
+        setResult(data);
+      } else {
+        setError(data.error || 'Scraping failed');
+      }
     } catch (err) {
-      setError(err.message || 'Failed to scrape. Make sure the backend is running on port 3001.');
+      setError('Failed to scrape. Check if backend is running.');
     } finally {
       setLoading(false);
     }
   };
 
-  const downloadJson = () => {
-    if (result) {
-      const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `scrape_${Date.now()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-  };
-
-  const downloadCSV = () => {
-    if (!result || result.items.length === 0) return;
-    
-    // Create CSV headers
-    const headers = ['Name', 'Price', 'Description', 'Image', 'Link', 'Metadata'];
-    
-    // Create CSV rows
-    const rows = result.items.map(item => [
-      item.name || '',
-      item.price || '',
-      (item.description || '').replace(/"/g, '""').substring(0, 200),
-      item.image || '',
-      item.link || '',
-      JSON.stringify(item.metadata || {}).replace(/"/g, '""')
-    ]);
-    
-    // Combine headers and rows
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
-    ].join('\n');
-    
-    // Download
-    const blob = new Blob([csvContent], { type: 'text/csv' });
+  const downloadJSON = () => {
+    if (!result) return;
+    const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `scrape_${Date.now()}.csv`;
+    a.download = `linkedin_${result.data.name || 'profile'}_${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  const ItemCard = ({ item, index }) => {
+  if (statusLoading) {
     return (
-      <div className="item-card">
-        {item.image && (
-          <div className="item-image">
-            <img 
-              src={item.image} 
-              alt={item.name || 'Item'} 
-              onError={(e) => e.target.style.display = 'none'}
-            />
-          </div>
-        )}
-        <div className="item-content">
-          <div className="item-number">#{index + 1}</div>
-          
-          {item.name && <h3 className="item-name">{item.name}</h3>}
-          
-          {item.price && <div className="item-price">{item.price}</div>}
-          
-          {item.description && (
-            <p className="item-description">
-              {item.description.substring(0, 180)}
-              {item.description.length > 180 ? '...' : ''}
-            </p>
-          )}
-          
-          {item.metadata && Object.keys(item.metadata).length > 0 && (
-            <div className="item-metadata">
-              {Object.entries(item.metadata).slice(0, 4).map(([key, val]) => (
-                <span key={key} className="meta-tag">
-                  <strong>{key}:</strong> {String(val).substring(0, 40)}
-                </span>
-              ))}
-            </div>
-          )}
-          
-          {item.link && (
-            <a href={item.link} target="_blank" rel="noopener noreferrer" className="item-link">
-              <ExternalLink size={14} />
-              View Details
-            </a>
-          )}
-          
-          <div className="confidence-bar">
-            <div 
-              className="confidence-fill" 
-              style={{ 
-                width: `${(item.confidence || 0) * 100}%`,
-                backgroundColor: item.confidence >= 0.7 ? '#10b981' : 
-                               item.confidence >= 0.4 ? '#f59e0b' : '#ef4444'
-              }}
-            />
-            <span className="confidence-text">{((item.confidence || 0) * 100).toFixed(0)}%</span>
+      <div className="app-container">
+        <div className="container">
+          <div className="loading-card">
+            <div className="spinner-large"></div>
+            <p className="loading-text">Checking login status...</p>
+            <p className="loading-subtext">Connecting to backend...</p>
           </div>
         </div>
       </div>
     );
-  };
+  }
+
+  if (loginInProgress) {
+    return (
+      <div className="app-container">
+        <div className="container">
+          <div className="header">
+            <div className="header-content">
+              <User className="header-icon" />
+              <h1>LinkedIn Profile Scraper</h1>
+            </div>
+          </div>
+          <div className="loading-card">
+            <Clock className="spinner-large" style={{ animation: 'pulse 2s infinite' }} />
+            <p className="loading-text">Login in Progress...</p>
+            <p className="loading-subtext">Please wait while we log into LinkedIn</p>
+            <p className="loading-subtext" style={{ marginTop: '10px' }}>
+              If this takes too long, check the browser window for verification
+            </p>
+            <button 
+              onClick={checkStatus}
+              className="btn-secondary"
+              style={{ marginTop: '20px' }}
+            >
+              Refresh Status
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isLoggedIn) {
+    return (
+      <div className="app-container">
+        <div className="container">
+          <div className="header">
+            <div className="header-content">
+              <User className="header-icon" />
+              <h1>LinkedIn Profile Scraper</h1>
+            </div>
+          </div>
+          <div className="error-card">
+            <XCircle className="error-icon" />
+            <div>
+              <h3>Not Logged In</h3>
+              <p>{error || 'Please restart the server to auto-login with credentials from .env file'}</p>
+              <p className="error-hint">Make sure LINKEDIN_EMAIL and LINKEDIN_PASSWORD are set in .env</p>
+              <button 
+                onClick={checkStatus}
+                className="btn-secondary"
+                style={{ marginTop: '15px' }}
+              >
+                Retry Connection
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
       <div className="container">
         {/* Header */}
-        <header className="header">
+        <div className="header">
           <div className="header-content">
-            <Globe className="header-icon" />
-            <h1>Advanced Web Scraper</h1>
+            <User className="header-icon" />
+            <h1>LinkedIn Profile Scraper</h1>
           </div>
-          <p className="header-subtitle">
-            Extract accurate, deduplicated data from ANY website with advanced selectors
-          </p>
-          <div className="header-features">
-            <span><CheckCircle size={16} /> No Duplicates</span>
-            <span><CheckCircle size={16} /> Smart Detection</span>
-            <span><CheckCircle size={16} /> Multiple Strategies</span>
-            <span><CheckCircle size={16} /> High Accuracy</span>
-          </div>
-        </header>
-
-        {/* Input Form */}
-        <div className="search-card">
-          <form onSubmit={handleScrape} className="search-form">
-            <input
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="Paste any URL (Amazon, Flipkart, Zomato, GitHub, Real Estate, News...)"
-              className="url-input"
-              disabled={loading}
-              required
-            />
-            <button type="submit" className="scrape-btn" disabled={loading}>
-              {loading ? (
-                <>
-                  <Loader2 className="btn-icon spin" />
-                  <span>Scraping...</span>
-                </>
-              ) : (
-                <>
-                  <Search className="btn-icon" />
-                  <span>Scrape Now</span>
-                </>
-              )}
-            </button>
-          </form>
-
-          <div className="supported-sites">
-            <p className="supported-label">✨ Works with 100+ website types:</p>
-            <div className="tags">
-              {[
-                'E-commerce', 'Food Delivery', 'Real Estate', 
-                'Job Portals', 'News', 'Blogs', 'GitHub',
-                'Social Media', 'Forums', 'Marketplaces'
-              ].map((tag) => (
-                <span key={tag} className="tag">{tag}</span>
-              ))}
-            </div>
-          </div>
+          <p className="header-subtitle">Extract profile data from any LinkedIn profile</p>
         </div>
 
-        {/* Loading */}
-        {loading && (
-          <div className="loading">
-            <div className="spinner" />
-            <p className="loading-text">Analyzing page structure...</p>
-            <p className="loading-subtext">Using advanced selectors and multiple extraction strategies</p>
-          </div>
-        )}
+        {/* Status Badge */}
+        <div className="status-banner">
+          <CheckCircle className="status-icon" />
+          <span>Logged In & Ready</span>
+        </div>
 
-        {/* Error */}
-        {error && (
-          <div className="error-card">
-            <XCircle className="error-icon" />
-            <div>
-              <h3>Scraping Error</h3>
-              <p>{error}</p>
-              <p className="error-hint">Make sure the backend server is running on port 3001</p>
-            </div>
+        {/* Scrape Form */}
+        <div className="scrape-card">
+          <div className="form-group">
+            <label htmlFor="profileUrl">LinkedIn Profile URL</label>
+            <input
+              type="url"
+              id="profileUrl"
+              value={profileUrl}
+              onChange={(e) => setProfileUrl(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !loading && profileUrl && handleScrape()}
+              placeholder="https://www.linkedin.com/in/username/"
+              className="input-field"
+              disabled={loading}
+            />
           </div>
-        )}
+
+          {error && (
+            <div className="error-card">
+              <AlertCircle className="error-icon" />
+              <div>
+                <p>{error}</p>
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={handleScrape}
+            disabled={loading || !profileUrl}
+            className="btn-primary"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="icon spin" />
+                <span>Scraping...</span>
+              </>
+            ) : (
+              <>
+                <Search className="icon" />
+                <span>Scrape Profile</span>
+              </>
+            )}
+          </button>
+        </div>
 
         {/* Results */}
-        {result && (
-          <div className="results">
-            {/* Metadata */}
-            <div className="metadata-card">
-              <div className="metadata-header">
-                <div className="metadata-left">
-                  <h2>Scrape Results</h2>
-                  <div className="metadata-info">
-                    <span className="stat-item">
-                      <Database size={18} />
-                      <strong>{result.summary.totalItems}</strong> items
-                    </span>
-                    <span className="stat-item">
-                      <CheckCircle size={18} />
-                      <strong>{result.summary.duplicatesRemoved}</strong> duplicates removed
-                    </span>
-                    <span className="stat-item stat-type">
-                      Type: <strong>{result.metadata.pageType}</strong>
-                    </span>
-                    <span className="stat-item stat-confidence">
-                      Avg Confidence: 
-                      <strong 
-                        className={`confidence-badge ${
-                          result.summary.avgConfidence >= 0.7 ? 'high' : 
-                          result.summary.avgConfidence >= 0.4 ? 'medium' : 'low'
-                        }`}
-                      >
-                        {(result.summary.avgConfidence * 100).toFixed(0)}%
-                      </strong>
-                    </span>
-                  </div>
-                </div>
-                
-                <div className="download-buttons">
-                  <button onClick={downloadJson} className="download-btn json">
-                    <Download size={18} />
-                    JSON
-                  </button>
-                  <button onClick={downloadCSV} className="download-btn csv">
-                    <Download size={18} />
-                    CSV
-                  </button>
-                </div>
-              </div>
-
-              {result.summary.warnings && result.summary.warnings.length > 0 && (
-                <div className="warnings">
-                  <AlertCircle size={20} />
-                  <div>
-                    <p className="warnings-title">Warnings:</p>
-                    <ul>
-                      {result.summary.warnings.map((warning, i) => (
-                        <li key={i}>{warning}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              )}
+        {result && result.success && (
+          <div className="results-container">
+            {/* Results Header */}
+            <div className="results-header">
+              <h2>Profile Data</h2>
+              <button onClick={downloadJSON} className="btn-download">
+                <Download className="icon" />
+                <span>Download JSON</span>
+              </button>
             </div>
 
-            {/* Items Grid */}
-            {result.items.length > 0 ? (
-              <div className="items-grid">
-                {result.items.slice(0, 150).map((item, index) => (
-                  <ItemCard key={item.id || index} item={item} index={index} />
-                ))}
+            {/* Basic Info */}
+            <div className="info-card">
+              <h3 className="card-title">Basic Information</h3>
+              <div className="info-grid">
+                <div className="info-item">
+                  <span className="info-label">Name:</span>
+                  <p className="info-value">{result.data.name || 'N/A'}</p>
+                </div>
+                <div className="info-item">
+                  <span className="info-label">Location:</span>
+                  <p className="info-value">{result.data.location || 'N/A'}</p>
+                </div>
+                <div className="info-item full-width">
+                  <span className="info-label">Headline:</span>
+                  <p className="info-value">{result.data.headline || 'N/A'}</p>
+                </div>
+                {result.data.connections && (
+                  <div className="info-item">
+                    <span className="info-label">Connections:</span>
+                    <p className="info-value">{result.data.connections}</p>
+                  </div>
+                )}
+                {result.data.about && (
+                  <div className="info-item full-width">
+                    <span className="info-label">About:</span>
+                    <p className="info-value about-text">{result.data.about}</p>
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="no-results">
-                <XCircle size={48} />
-                <h3>No items found</h3>
-                <p>The scraper couldn't extract structured data from this page.</p>
-                <p className="no-results-hint">Try a different URL or check the warnings above.</p>
+            </div>
+
+            {/* Experience */}
+            {result.data.experience && result.data.experience.length > 0 && (
+              <div className="info-card">
+                <h3 className="card-title">Experience ({result.data.experience.length})</h3>
+                <div className="list-container">
+                  {result.data.experience.map((exp, i) => (
+                    <div key={i} className="list-item">
+                      <div className="list-marker"></div>
+                      <div className="list-content">
+                        <p className="list-title">{exp.title}</p>
+                        <p className="list-subtitle">{exp.company}</p>
+                        <p className="list-meta">{exp.duration}</p>
+                        {exp.location && <p className="list-meta">{exp.location}</p>}
+                        {exp.description && (
+                          <p className="list-description">{exp.description}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+
+            {/* Education */}
+            {result.data.education && result.data.education.length > 0 && (
+              <div className="info-card">
+                <h3 className="card-title">Education ({result.data.education.length})</h3>
+                <div className="list-container">
+                  {result.data.education.map((edu, i) => (
+                    <div key={i} className="list-item">
+                      <div className="list-marker edu"></div>
+                      <div className="list-content">
+                        <p className="list-title">{edu.school}</p>
+                        <p className="list-subtitle">{edu.degree}</p>
+                        {edu.field && <p className="list-meta">{edu.field}</p>}
+                        <p className="list-meta">{edu.duration}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Skills */}
+            {result.data.skills && result.data.skills.length > 0 && (
+              <div className="info-card">
+                <h3 className="card-title">Skills ({result.data.skills.length})</h3>
+                <div className="tags-container">
+                  {result.data.skills.map((skill, i) => (
+                    <span key={i} className="tag">
+                      {skill}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Certifications */}
+            {result.data.certifications && result.data.certifications.length > 0 && (
+              <div className="info-card">
+                <h3 className="card-title">Certifications ({result.data.certifications.length})</h3>
+                <div className="list-container">
+                  {result.data.certifications.map((cert, i) => (
+                    <div key={i} className="list-item">
+                      <div className="list-marker cert"></div>
+                      <div className="list-content">
+                        <p className="list-title">{cert.name}</p>
+                        <p className="list-subtitle">{cert.issuer}</p>
+                        {cert.date && <p className="list-meta">{cert.date}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Scraped Info */}
+            <div className="scraped-info">
+              <p>Scraped at: {new Date(result.scrapedAt).toLocaleString()}</p>
+              <p>Profile URL: <a href={result.profileUrl} target="_blank" rel="noopener noreferrer">{result.profileUrl}</a></p>
+            </div>
           </div>
         )}
       </div>
