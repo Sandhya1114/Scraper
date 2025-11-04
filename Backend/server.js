@@ -1,4 +1,4 @@
-// LinkedIn Profile Scraper - server.js (ADVANCED SELECTORS)
+// LinkedIn Profile Scraper - server.js (ROBUST FIXED VERSION)
 // Install: npm install express playwright-extra puppeteer-extra-plugin-stealth cors dotenv
 
 const express = require('express');
@@ -123,29 +123,21 @@ class LinkedInScraper {
         timeout: 60000 
       });
 
-      // Wait for main content
       await this.page.waitForSelector('.pv-text-details__left-panel, .ph5', { timeout: 10000 }).catch(() => {});
       await this.randomDelay(3000, 5000);
       
-      // Advanced scrolling with button clicks
+      console.log('📜 Starting advanced scroll and section expansion...');
       await this.advancedScroll();
-      
-      await this.randomDelay(2000, 3000);
+      await this.randomDelay(3000, 4000);
 
       const profileData = await this.page.evaluate(() => {
-        // ============================================
-        // ADVANCED SELECTOR SYSTEM
-        // ============================================
-
         const utils = {
-          // Safe text extraction with multiple fallbacks
           getText: (element) => {
             if (!element) return null;
             const text = (element.innerText || element.textContent || '').trim();
             return text.length > 0 ? text : null;
           },
 
-          // Try multiple selectors in order
           trySelectors: (selectors) => {
             for (const selector of selectors) {
               const el = document.querySelector(selector);
@@ -157,7 +149,6 @@ class LinkedInScraper {
             return null;
           },
 
-          // Get all matching elements' text
           getAllText: (selectors) => {
             const texts = new Set();
             for (const selector of selectors) {
@@ -170,20 +161,63 @@ class LinkedInScraper {
             return Array.from(texts);
           },
 
-          // Find section container by ID
+          // IMPROVED: Find section with multiple strategies
           findSection: (sectionId) => {
-            const section = document.querySelector(`#${sectionId}`);
-            if (!section) return null;
+            console.log(`Looking for section: ${sectionId}`);
             
-            // Try multiple container patterns
-            return section.closest('section')?.querySelector('.pvs-list__outer-container') ||
-                   section.parentElement?.querySelector('.pvs-list') ||
-                   section.parentElement?.nextElementSibling?.querySelector('ul') ||
-                   section.parentElement?.querySelector('ul');
+            // Strategy 1: Direct ID lookup
+            let section = document.querySelector(`#${sectionId}`);
+            if (section) {
+              console.log(`  ✓ Found by ID: #${sectionId}`);
+              
+              // Try multiple container patterns
+              const containers = [
+                section.closest('section')?.querySelector('.pvs-list__outer-container'),
+                section.closest('section')?.querySelector('ul.pvs-list'),
+                section.parentElement?.querySelector('.pvs-list'),
+                section.parentElement?.nextElementSibling?.querySelector('ul'),
+                section.closest('section')?.querySelector('ul')
+              ];
+              
+              for (const container of containers) {
+                if (container) {
+                  console.log(`  ✓ Found container`);
+                  return container;
+                }
+              }
+            }
+
+            // Strategy 2: Find by section heading text
+            const headings = document.querySelectorAll('h2, h3, div[id*="' + sectionId + '"]');
+            for (const heading of headings) {
+              const text = utils.getText(heading)?.toLowerCase();
+              if (text?.includes(sectionId.replace(/_/g, ' '))) {
+                console.log(`  ✓ Found by heading text: "${text}"`);
+                const container = heading.closest('section')?.querySelector('ul') || 
+                                heading.parentElement?.querySelector('ul');
+                if (container) return container;
+              }
+            }
+
+            // Strategy 3: Find all sections and match by content
+            const sections = document.querySelectorAll('section.artdeco-card, section');
+            for (const sec of sections) {
+              const h2 = sec.querySelector('h2');
+              if (h2) {
+                const text = utils.getText(h2)?.toLowerCase();
+                if (text?.includes(sectionId.replace(/_/g, ' '))) {
+                  console.log(`  ✓ Found by section content: "${text}"`);
+                  return sec.querySelector('ul');
+                }
+              }
+            }
+
+            console.log(`  ✗ Section not found: ${sectionId}`);
+            return null;
           },
 
-          // Extract all visible text from spans
           extractSpanTexts: (container) => {
+            if (!container) return [];
             const spans = container.querySelectorAll('span[aria-hidden="true"]');
             return Array.from(spans)
               .map(s => utils.getText(s))
@@ -191,341 +225,258 @@ class LinkedInScraper {
           }
         };
 
-        // ============================================
-        // NAME EXTRACTION
-        // ============================================
+        // NAME
         const getName = () => {
           const selectors = [
             'h1.text-heading-xlarge',
-            'h1.inline.t-24.v-align-middle.break-words',
+            'h1.inline.t-24',
             '.pv-text-details__left-panel h1',
-            '.ph5.pb5 h1',
-            'h1[class*="heading"]',
-            'div.ph5 h1'
+            '.ph5 h1',
+            'h1'
           ];
-          
-          let name = utils.trySelectors(selectors);
-          if (name) return name;
-
-          // Fallback: Find any h1 that looks like a name
-          const h1s = document.querySelectorAll('h1');
-          for (const h1 of h1s) {
-            const text = utils.getText(h1);
-            if (text && text.length > 2 && text.length < 100 && 
-                !text.toLowerCase().includes('linkedin') && 
-                !text.includes('|')) {
-              return text;
-            }
-          }
-
-          // Last resort: meta tag
-          const metaTitle = document.querySelector('meta[property="og:title"]');
-          if (metaTitle?.content) {
-            return metaTitle.content.split('|')[0].split('-')[0].trim();
-          }
-
-          return null;
+          return utils.trySelectors(selectors);
         };
 
-        // ============================================
-        // HEADLINE EXTRACTION
-        // ============================================
+        // HEADLINE
         const getHeadline = () => {
           const selectors = [
             '.text-body-medium.break-words',
             '.pv-text-details__left-panel .text-body-medium',
-            'div.text-body-medium',
-            '.pv-top-card--list .text-body-medium',
-            '[class*="headline"]',
-            '.pv-top-card-v2-section__info h2 + div'
+            'div.text-body-medium'
           ];
-          
           const headline = utils.trySelectors(selectors);
-          
-          // Filter out if it looks like a location or connections
-          if (headline && headline.length > 10 && 
-              !headline.includes('connection') && 
-              !headline.match(/^\d+\s*connection/i)) {
+          if (headline && headline.length > 10 && !headline.includes('connection')) {
             return headline;
           }
-
           return null;
         };
 
-        // ============================================
-        // LOCATION EXTRACTION
-        // ============================================
+        // LOCATION
         const getLocation = () => {
           const selectors = [
             '.text-body-small.inline.t-black--light.break-words',
             '.pv-text-details__left-panel .text-body-small',
-            'span.text-body-small.inline',
-            '.pv-top-card--list .text-body-small'
+            'span.text-body-small.inline'
           ];
-          
           const texts = utils.getAllText(selectors);
-          
-          // Find text that looks like a location (has comma or country names)
-          for (const text of texts) {
-            if (text.includes(',') || text.match(/India|USA|UK|Canada|Australia/i)) {
-              return text;
-            }
-          }
-
-          return texts.find(t => t.length > 3 && !t.includes('connection')) || null;
+          return texts.find(t => t.includes(',') || t.match(/India|USA|UK|Canada/i)) || 
+                 texts.find(t => t.length > 3 && !t.includes('connection')) || null;
         };
 
-        // ============================================
-        // ABOUT SECTION EXTRACTION
-        // ============================================
+        // ABOUT
         const getAbout = () => {
           const aboutSection = utils.findSection('about');
           if (!aboutSection) return null;
 
-          // Try multiple approaches
-          const selectors = [
-            'span[aria-hidden="true"]',
-            '.inline-show-more-text span[aria-hidden="true"]',
-            '.display-flex.ph5.pv3 span',
-            '.pvs-list__outer-container span'
-          ];
-
-          for (const selector of selectors) {
-            const span = aboutSection.querySelector(selector);
-            const text = utils.getText(span);
+          const textElements = aboutSection.querySelectorAll('span[aria-hidden="true"]');
+          for (const el of textElements) {
+            const text = utils.getText(el);
             if (text && text.length > 20) return text;
           }
-
-          // Get all text from about section
-          const allText = utils.getText(aboutSection);
-          if (allText && allText.length > 20) return allText;
-
           return null;
         };
 
-        // ============================================
-        // PROFILE IMAGE EXTRACTION
-        // ============================================
+        // PROFILE IMAGE
         const getProfileImage = () => {
           const selectors = [
+            '.pv-top-card-profile-picture__image--show img',
             '.pv-top-card-profile-picture__image',
-            'img[data-ghost-classes]',
-            '.pv-top-card__photo img',
-            'img.evi-image',
-            'img[class*="profile"]'
+            'img.pv-top-card-profile-picture__image',
+            'button img[class*="profile"]',
+            'img[src*="profile-displayphoto"]'
           ];
 
           for (const selector of selectors) {
             const img = document.querySelector(selector);
-            if (img?.src && !img.src.includes('data:image')) {
+            if (img?.src && img.src.includes('http') && !img.src.includes('data:')) {
               return img.src;
             }
           }
-
           return null;
         };
 
-        // ============================================
-        // CONNECTIONS EXTRACTION
-        // ============================================
+        // CONNECTIONS
         const getConnections = () => {
-          const selectors = [
+          const texts = utils.getAllText([
             '.pv-top-card--list-bullet li',
-            '.pvs-header__subtitle',
             'span.t-bold span',
             '.pv-top-card--list .text-body-small'
-          ];
-
-          const texts = utils.getAllText(selectors);
-          const connectionText = texts.find(t => t.toLowerCase().includes('connection'));
-          
-          return connectionText || null;
+          ]);
+          return texts.find(t => t.toLowerCase().includes('connection')) || null;
         };
 
-        // ============================================
-        // EXPERIENCE SECTION EXTRACTION
-        // ============================================
+        // EXPERIENCE - ROBUST
         const getExperience = () => {
+          console.log('Extracting Experience...');
           const container = utils.findSection('experience');
-          if (!container) return [];
+          if (!container) {
+            console.log('  ✗ Experience container not found');
+            return [];
+          }
 
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li[class*="artdeco-list__item"]');
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
+          console.log(`  Found ${items.length} experience items`);
           
-          return Array.from(items).map(item => {
-            const texts = utils.extractSpanTexts(item);
+          return Array.from(items).map((item, idx) => {
+            const spans = utils.extractSpanTexts(item);
+            console.log(`  Item ${idx + 1} spans:`, spans);
+            
+            // Find all links and bold text
+            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
+              .map(s => utils.getText(s)).filter(t => t);
+            
             const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
 
-            // Smart parsing based on text patterns
-            let title = null, company = null, duration = null, location = null;
+            let title = boldTexts[0] || spans[0] || null;
+            let company = boldTexts[1] || spans[1] || null;
+            let duration = spans.find(s => s.match(/\d{4}|yr|mo/i)) || null;
+            let location = spans.find(s => s.includes(',') && !s.match(/\d{4}/)) || null;
 
-            for (let i = 0; i < texts.length; i++) {
-              const text = texts[i];
-              
-              // Title is usually first and bold
-              if (!title && text.length > 2 && text.length < 150) {
-                title = text;
-              }
-              // Company name usually contains company indicators
-              else if (!company && (text.includes('·') || text.includes('•') || i === 1)) {
-                company = text.replace(/[·•]/g, '').trim();
-              }
-              // Duration contains date patterns
-              else if (!duration && text.match(/\d{4}|\d+\s*(yr|mo|year|month)/i)) {
-                duration = text;
-              }
-              // Location usually has comma or city names
-              else if (!location && (text.includes(',') || text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/))) {
-                location = text;
-              }
-            }
-
-            return {
-              title: title,
-              company: company,
-              duration: duration,
-              location: location,
-              description: description,
-              rawTexts: texts
-            };
+            return { title, company, duration, location, description };
           })
           .filter(exp => exp.title || exp.company)
           .slice(0, 15);
         };
 
-        // ============================================
-        // EDUCATION SECTION EXTRACTION
-        // ============================================
+        // EDUCATION - ROBUST
         const getEducation = () => {
+          console.log('Extracting Education...');
           const container = utils.findSection('education');
-          if (!container) return [];
+          if (!container) {
+            console.log('  ✗ Education container not found');
+            return [];
+          }
 
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li[class*="artdeco-list__item"]');
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
+          console.log(`  Found ${items.length} education items`);
           
-          return Array.from(items).map(item => {
-            const texts = utils.extractSpanTexts(item);
+          return Array.from(items).map((item, idx) => {
+            const spans = utils.extractSpanTexts(item);
+            console.log(`  Item ${idx + 1} spans:`, spans);
 
-            let school = null, degree = null, field = null, duration = null;
+            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
+              .map(s => utils.getText(s)).filter(t => t);
 
-            for (let i = 0; i < texts.length; i++) {
-              const text = texts[i];
-              
-              if (!school && i === 0) {
-                school = text;
-              }
-              else if (!degree && (text.includes('Bachelor') || text.includes('Master') || text.includes('PhD') || i === 1)) {
-                degree = text;
-              }
-              else if (!field && !text.match(/\d{4}/) && i === 2) {
-                field = text;
-              }
-              else if (!duration && text.match(/\d{4}/)) {
-                duration = text;
-              }
-            }
+            let school = boldTexts[0] || spans[0] || null;
+            let degree = spans.find(s => s.match(/Bachelor|Master|B\.?Tech|M\.?Tech|PhD|Degree|Diploma/i)) || boldTexts[1] || spans[1] || null;
+            let field = spans[2] || null;
+            let duration = spans.find(s => s.match(/\d{4}|20\d{2}/)) || null;
 
-            return {
-              school: school,
-              degree: degree,
-              field: field,
-              duration: duration,
-              rawTexts: texts
-            };
+            return { school, degree, field, duration };
           })
           .filter(edu => edu.school)
           .slice(0, 10);
         };
 
-        // ============================================
-        // SKILLS SECTION EXTRACTION
-        // ============================================
+        // SKILLS - ROBUST
         const getSkills = () => {
+          console.log('Extracting Skills...');
           const container = utils.findSection('skills');
-          if (!container) return [];
-
-          const selectors = [
-            '.mr1.hoverable-link-text.t-bold span[aria-hidden="true"]',
-            '.hoverable-link-text span[aria-hidden="true"]',
-            'a[href*="/skills/"] span[aria-hidden="true"]',
-            '.pvs-list__item--one-column span.t-bold'
-          ];
+          if (!container) {
+            console.log('  ✗ Skills container not found');
+            return [];
+          }
 
           const skills = new Set();
+          const skillElements = container.querySelectorAll('a[href*="/skills/"], .hoverable-link-text.t-bold');
+          console.log(`  Found ${skillElements.length} skill elements`);
           
-          for (const selector of selectors) {
-            const elements = container.querySelectorAll(selector);
-            elements.forEach(el => {
-              const skill = utils.getText(el);
-              if (skill && skill.length > 1 && skill.length < 100) {
-                skills.add(skill);
-              }
-            });
-          }
+          skillElements.forEach(el => {
+            const span = el.querySelector('span[aria-hidden="true"]');
+            const skill = utils.getText(span || el);
+            if (skill && skill.length > 1 && skill.length < 100 && !skill.match(/\d+ endorsement/i)) {
+              skills.add(skill);
+            }
+          });
 
           return Array.from(skills).slice(0, 50);
         };
 
-        // ============================================
-        // CERTIFICATIONS SECTION EXTRACTION
-        // ============================================
+        // CERTIFICATIONS - ROBUST
         const getCertifications = () => {
+          console.log('Extracting Certifications...');
           const container = utils.findSection('licenses_and_certifications');
-          if (!container) return [];
+          if (!container) {
+            console.log('  ✗ Certifications container not found');
+            return [];
+          }
 
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li[class*="artdeco-list__item"]');
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
+          console.log(`  Found ${items.length} certification items`);
           
-          return Array.from(items).map(item => {
-            const texts = utils.extractSpanTexts(item);
+          return Array.from(items).map((item, idx) => {
+            const spans = utils.extractSpanTexts(item);
+            console.log(`  Item ${idx + 1} spans:`, spans);
 
-            return {
-              name: texts[0] || null,
-              issuer: texts[1] || null,
-              date: texts[2] || null,
-              credentialId: texts.find(t => t.toLowerCase().includes('credential')) || null,
-              rawTexts: texts
-            };
+            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
+              .map(s => utils.getText(s)).filter(t => t);
+
+            let name = boldTexts[0] || spans[0] || null;
+            let issuer = boldTexts[1] || spans[1] || null;
+            let date = spans.find(s => s.includes('Issued') || s.match(/\w+ \d{4}/)) || null;
+            let credentialId = spans.find(s => s.toLowerCase().includes('credential')) || null;
+
+            return { name, issuer, date, credentialId };
           })
           .filter(cert => cert.name)
           .slice(0, 15);
         };
 
-        // ============================================
-        // PROJECTS SECTION EXTRACTION
-        // ============================================
+        // PROJECTS - ROBUST
         const getProjects = () => {
+          console.log('Extracting Projects...');
           const container = utils.findSection('projects');
-          if (!container) return [];
+          if (!container) {
+            console.log('  ✗ Projects container not found');
+            return [];
+          }
 
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li[class*="artdeco-list__item"]');
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
+          console.log(`  Found ${items.length} project items`);
           
-          return Array.from(items).map(item => {
-            const texts = utils.extractSpanTexts(item);
+          return Array.from(items).map((item, idx) => {
+            const spans = utils.extractSpanTexts(item);
+            console.log(`  Item ${idx + 1} spans:`, spans);
+            
             const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
+            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
+              .map(s => utils.getText(s)).filter(t => t);
 
-            return {
-              name: texts[0] || null,
-              date: texts.find(t => t.match(/\d{4}/)) || null,
-              description: description,
-              rawTexts: texts
-            };
+            let name = boldTexts[0] || spans[0] || null;
+            let date = spans.find(s => s.match(/\d{4}/)) || null;
+            let association = spans.find(s => s.includes('Associated')) || null;
+
+            return { name, date, association, description };
           })
           .filter(proj => proj.name)
           .slice(0, 10);
         };
 
-        // ============================================
-        // LANGUAGES SECTION EXTRACTION
-        // ============================================
+        // LANGUAGES - ROBUST
         const getLanguages = () => {
+          console.log('Extracting Languages...');
           const container = utils.findSection('languages');
-          if (!container) return [];
+          if (!container) {
+            console.log('  ✗ Languages container not found');
+            return [];
+          }
 
-          const texts = utils.extractSpanTexts(container);
-          return texts.filter(t => t.length > 1 && t.length < 50).slice(0, 10);
+          const languages = [];
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
+          console.log(`  Found ${items.length} language items`);
+          
+          items.forEach(item => {
+            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
+              .map(s => utils.getText(s)).filter(t => t);
+            const lang = boldTexts[0];
+            if (lang && lang.length > 1 && lang.length < 50 && !lang.includes('follower')) {
+              languages.push(lang);
+            }
+          });
+
+          return languages.slice(0, 10);
         };
 
-        // ============================================
-        // RETURN ALL DATA
-        // ============================================
         return {
           name: getName(),
           headline: getHeadline(),
@@ -542,12 +493,12 @@ class LinkedInScraper {
         };
       });
 
-      // Enhanced logging
       console.log('\n✅ SCRAPING COMPLETED!');
       console.log('═══════════════════════════════════════');
       console.log(`📛 Name: ${profileData.name || '❌ NOT FOUND'}`);
       console.log(`💼 Headline: ${profileData.headline || '❌ NOT FOUND'}`);
       console.log(`📍 Location: ${profileData.location || '❌ NOT FOUND'}`);
+      console.log(`🖼️  Profile Image: ${profileData.profileImage ? '✅ Found' : '❌ NOT FOUND'}`);
       console.log(`📝 About: ${profileData.about ? '✅ Found (' + profileData.about.length + ' chars)' : '❌ NOT FOUND'}`);
       console.log(`🔗 Connections: ${profileData.connections || '❌ NOT FOUND'}`);
       console.log(`💼 Experience: ${profileData.experience.length} entries`);
@@ -557,21 +508,6 @@ class LinkedInScraper {
       console.log(`🚀 Projects: ${profileData.projects.length} projects`);
       console.log(`🌐 Languages: ${profileData.languages.length} languages`);
       console.log('═══════════════════════════════════════\n');
-
-      // Log sample data for debugging
-      if (profileData.experience.length > 0) {
-        console.log('📊 First Experience Entry:');
-        console.log('   Title:', profileData.experience[0].title);
-        console.log('   Company:', profileData.experience[0].company);
-        console.log('   Raw texts:', profileData.experience[0].rawTexts);
-      }
-
-      if (profileData.education.length > 0) {
-        console.log('\n📊 First Education Entry:');
-        console.log('   School:', profileData.education[0].school);
-        console.log('   Degree:', profileData.education[0].degree);
-        console.log('   Raw texts:', profileData.education[0].rawTexts);
-      }
 
       return {
         success: true,
@@ -591,58 +527,65 @@ class LinkedInScraper {
   }
 
   async advancedScroll() {
-    console.log('📜 Advanced scrolling initiated...');
+    console.log('📜 Advanced scrolling with section expansion...');
     
-    // Phase 1: Initial slow scroll to trigger lazy loading
-    for (let i = 0; i < 5; i++) {
+    // Phase 1: Initial scroll
+    for (let i = 0; i < 6; i++) {
       await this.page.evaluate((i) => {
         window.scrollTo({
-          top: (i + 1) * (document.body.scrollHeight / 5),
+          top: (i + 1) * (document.body.scrollHeight / 6),
           behavior: 'smooth'
         });
       }, i);
-      await this.randomDelay(2000, 3000);
+      await this.randomDelay(2500, 3500);
     }
 
-    // Phase 2: Click "Show all" buttons
-    await this.randomDelay(1000, 2000);
-    const showButtons = await this.page.$$('button[aria-expanded="false"], button:has-text("Show all"), button:has-text("show more")').catch(() => []);
-    console.log(`   Found ${showButtons.length} expandable buttons`);
+    // Phase 2: Click ALL "Show all" / "Show more" buttons
+    await this.randomDelay(2000, 3000);
     
-    for (let i = 0; i < Math.min(showButtons.length, 10); i++) {
-      try {
-        await showButtons[i].click({ timeout: 3000 });
-        await this.randomDelay(1500, 2500);
-      } catch (e) {
-        // Button not clickable or already expanded
+    // Find and click expand buttons multiple times
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const buttons = await this.page.$$('button:has-text("Show all"), button:has-text("show more"), button[aria-label*="Show all"], button[aria-expanded="false"]').catch(() => []);
+      console.log(`   Attempt ${attempt + 1}: Found ${buttons.length} expand buttons`);
+      
+      for (let i = 0; i < buttons.length; i++) {
+        try {
+          await buttons[i].scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+          await buttons[i].click({ timeout: 3000 });
+          console.log(`   ✓ Clicked button ${i + 1}`);
+          await this.randomDelay(2000, 3000);
+        } catch (e) {
+          // Button not clickable or already expanded
+        }
       }
+      
+      await this.randomDelay(1500, 2500);
     }
 
-    // Phase 3: Scroll to bottom
-    await this.page.evaluate(() => {
-      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-    });
-    await this.randomDelay(2000, 3000);
-
-    // Phase 4: Scroll back to top
-    await this.page.evaluate(() => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
-    await this.randomDelay(2000, 3000);
-
-    // Phase 5: One more pass through sections
-    const sections = ['experience', 'education', 'skills', 'licenses_and_certifications'];
+    // Phase 3: Scroll through each major section
+    const sections = ['experience', 'education', 'skills', 'licenses_and_certifications', 'projects', 'languages'];
     for (const section of sections) {
       try {
         await this.page.evaluate((sectionId) => {
           const el = document.querySelector(`#${sectionId}`);
-          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
         }, section);
-        await this.randomDelay(1500, 2000);
-      } catch (e) {
-        // Section not found
-      }
+        await this.randomDelay(2000, 3000);
+      } catch (e) {}
     }
+
+    // Phase 4: Final full scroll
+    await this.page.evaluate(() => {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    });
+    await this.randomDelay(3000, 4000);
+
+    await this.page.evaluate(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    await this.randomDelay(2000, 3000);
 
     console.log('✅ Advanced scrolling completed');
   }
@@ -718,7 +661,6 @@ const startAutoScraper = async () => {
   }
 };
 
-// API Endpoints
 app.post('/api/scrape-profile', async (req, res) => {
   try {
     const { profileUrl } = req.body;
@@ -780,7 +722,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'linkedin-scraper',
-    version: '3.0.0-advanced',
+    version: '5.0.0-robust',
     loginStatus: loginStatus
   });
 });

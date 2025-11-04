@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Search, Download, CheckCircle, XCircle, Loader2, AlertCircle, Clock, RefreshCw } from 'lucide-react';
+import { User, Search, Download, CheckCircle, XCircle, Loader2, AlertCircle, Clock, RefreshCw, MapPin, Briefcase, GraduationCap, Award, Code, Globe, FileText, Link as LinkIcon } from 'lucide-react';
 import './App.css';
 
 const App = () => {
@@ -14,19 +14,17 @@ const App = () => {
 
   const API_URL = 'http://localhost:3001';
 
-  // Check login status on mount and retry if login is in progress
   useEffect(() => {
     checkStatus();
   }, []);
 
-  // Retry status check if login is in progress
   useEffect(() => {
     if (loginInProgress && statusCheckCount < 20) {
       const timer = setTimeout(() => {
         console.log('Login in progress, checking again...');
         setStatusCheckCount(prev => prev + 1);
         checkStatus();
-      }, 3000); // Check every 3 seconds
+      }, 3000);
       return () => clearTimeout(timer);
     }
   }, [loginInProgress, statusCheckCount]);
@@ -39,7 +37,6 @@ const App = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        // Add timeout to prevent hanging
         signal: AbortSignal.timeout(10000)
       });
       
@@ -59,7 +56,7 @@ const App = () => {
         setError(null);
       } else if (data.loggedIn) {
         setError(null);
-        setStatusCheckCount(0); // Reset counter on successful login
+        setStatusCheckCount(0);
       }
       
       setStatusLoading(false);
@@ -109,7 +106,7 @@ const App = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `linkedin_${result.data.name || 'profile'}_${Date.now()}.json`;
+    a.download = `linkedin_${result.data.name?.replace(/\s+/g, '_') || 'profile'}_${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -150,6 +147,7 @@ const App = () => {
               className="btn-secondary"
               style={{ marginTop: '20px' }}
             >
+              <RefreshCw className="icon" />
               Refresh Status
             </button>
           </div>
@@ -179,6 +177,7 @@ const App = () => {
                 className="btn-secondary"
                 style={{ marginTop: '15px' }}
               >
+                <RefreshCw className="icon" />
                 Retry Connection
               </button>
             </div>
@@ -197,19 +196,22 @@ const App = () => {
             <User className="header-icon" />
             <h1>LinkedIn Profile Scraper</h1>
           </div>
-          <p className="header-subtitle">Extract profile data from any LinkedIn profile</p>
+          <p className="header-subtitle">Extract comprehensive profile data from any LinkedIn profile</p>
         </div>
 
         {/* Status Badge */}
         <div className="status-banner">
           <CheckCircle className="status-icon" />
-          <span>Logged In & Ready</span>
+          <span>Logged In & Ready to Scrape</span>
         </div>
 
         {/* Scrape Form */}
         <div className="scrape-card">
           <div className="form-group">
-            <label htmlFor="profileUrl">LinkedIn Profile URL</label>
+            <label htmlFor="profileUrl">
+              <LinkIcon className="label-icon" />
+              LinkedIn Profile URL
+            </label>
             <input
               type="url"
               id="profileUrl"
@@ -239,7 +241,7 @@ const App = () => {
             {loading ? (
               <>
                 <Loader2 className="icon spin" />
-                <span>Scraping...</span>
+                <span>Scraping Profile...</span>
               </>
             ) : (
               <>
@@ -255,56 +257,82 @@ const App = () => {
           <div className="results-container">
             {/* Results Header */}
             <div className="results-header">
-              <h2>Profile Data</h2>
+              <div className="results-header-left">
+                <h2>Profile Data Extracted</h2>
+                <p className="results-subtitle">
+                  Scraped on {new Date(result.scrapedAt).toLocaleString()}
+                </p>
+              </div>
               <button onClick={downloadJSON} className="btn-download">
                 <Download className="icon" />
                 <span>Download JSON</span>
               </button>
             </div>
 
-            {/* Basic Info */}
-            <div className="info-card">
-              <h3 className="card-title">Basic Information</h3>
-              <div className="info-grid">
-                <div className="info-item">
-                  <span className="info-label">Name:</span>
-                  <p className="info-value">{result.data.name || 'N/A'}</p>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">Location:</span>
-                  <p className="info-value">{result.data.location || 'N/A'}</p>
-                </div>
-                <div className="info-item full-width">
-                  <span className="info-label">Headline:</span>
-                  <p className="info-value">{result.data.headline || 'N/A'}</p>
-                </div>
-                {result.data.connections && (
-                  <div className="info-item">
-                    <span className="info-label">Connections:</span>
-                    <p className="info-value">{result.data.connections}</p>
+            {/* Profile Card with Image */}
+            <div className="profile-card">
+              <div className="profile-header">
+                {result.data.profileImage && (
+                  <div className="profile-image-wrapper">
+                    <img 
+                      src={result.data.profileImage} 
+                      alt={result.data.name || 'Profile'} 
+                      className="profile-image"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                      }}
+                    />
                   </div>
                 )}
-                {result.data.about && (
-                  <div className="info-item full-width">
-                    <span className="info-label">About:</span>
-                    <p className="info-value about-text">{result.data.about}</p>
+                <div className="profile-info">
+                  <h2 className="profile-name">{result.data.name || 'N/A'}</h2>
+                  {result.data.headline && (
+                    <p className="profile-headline">{result.data.headline}</p>
+                  )}
+                  <div className="profile-meta">
+                    {result.data.location && (
+                      <div className="meta-item">
+                        <MapPin className="meta-icon" />
+                        <span>{result.data.location}</span>
+                      </div>
+                    )}
+                    {result.data.connections && (
+                      <div className="meta-item">
+                        <User className="meta-icon" />
+                        <span>{result.data.connections}</span>
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
+
+              {result.data.about && (
+                <div className="profile-about">
+                  <h3 className="section-title">
+                    <FileText className="section-icon" />
+                    About
+                  </h3>
+                  <p className="about-text">{result.data.about}</p>
+                </div>
+              )}
             </div>
 
             {/* Experience */}
             {result.data.experience && result.data.experience.length > 0 && (
-              <div className="info-card">
-                <h3 className="card-title">Experience ({result.data.experience.length})</h3>
+              <div className="data-card">
+                <h3 className="card-title">
+                  <Briefcase className="title-icon" />
+                  Experience
+                  <span className="count-badge">{result.data.experience.length}</span>
+                </h3>
                 <div className="list-container">
                   {result.data.experience.map((exp, i) => (
                     <div key={i} className="list-item">
-                      <div className="list-marker"></div>
+                      <div className="list-marker experience"></div>
                       <div className="list-content">
-                        <p className="list-title">{exp.title}</p>
-                        <p className="list-subtitle">{exp.company}</p>
-                        <p className="list-meta">{exp.duration}</p>
+                        <p className="list-title">{exp.title || 'N/A'}</p>
+                        {exp.company && <p className="list-subtitle">{exp.company}</p>}
+                        {exp.duration && <p className="list-meta">{exp.duration}</p>}
                         {exp.location && <p className="list-meta">{exp.location}</p>}
                         {exp.description && (
                           <p className="list-description">{exp.description}</p>
@@ -318,17 +346,21 @@ const App = () => {
 
             {/* Education */}
             {result.data.education && result.data.education.length > 0 && (
-              <div className="info-card">
-                <h3 className="card-title">Education ({result.data.education.length})</h3>
+              <div className="data-card">
+                <h3 className="card-title">
+                  <GraduationCap className="title-icon" />
+                  Education
+                  <span className="count-badge">{result.data.education.length}</span>
+                </h3>
                 <div className="list-container">
                   {result.data.education.map((edu, i) => (
                     <div key={i} className="list-item">
-                      <div className="list-marker edu"></div>
+                      <div className="list-marker education"></div>
                       <div className="list-content">
-                        <p className="list-title">{edu.school}</p>
-                        <p className="list-subtitle">{edu.degree}</p>
+                        <p className="list-title">{edu.school || 'N/A'}</p>
+                        {edu.degree && <p className="list-subtitle">{edu.degree}</p>}
                         {edu.field && <p className="list-meta">{edu.field}</p>}
-                        <p className="list-meta">{edu.duration}</p>
+                        {edu.duration && <p className="list-meta">{edu.duration}</p>}
                       </div>
                     </div>
                   ))}
@@ -338,11 +370,15 @@ const App = () => {
 
             {/* Skills */}
             {result.data.skills && result.data.skills.length > 0 && (
-              <div className="info-card">
-                <h3 className="card-title">Skills ({result.data.skills.length})</h3>
+              <div className="data-card">
+                <h3 className="card-title">
+                  <Code className="title-icon" />
+                  Skills
+                  <span className="count-badge">{result.data.skills.length}</span>
+                </h3>
                 <div className="tags-container">
                   {result.data.skills.map((skill, i) => (
-                    <span key={i} className="tag">
+                    <span key={i} className="tag skill-tag">
                       {skill}
                     </span>
                   ))}
@@ -352,16 +388,23 @@ const App = () => {
 
             {/* Certifications */}
             {result.data.certifications && result.data.certifications.length > 0 && (
-              <div className="info-card">
-                <h3 className="card-title">Certifications ({result.data.certifications.length})</h3>
+              <div className="data-card">
+                <h3 className="card-title">
+                  <Award className="title-icon" />
+                  Certifications
+                  <span className="count-badge">{result.data.certifications.length}</span>
+                </h3>
                 <div className="list-container">
                   {result.data.certifications.map((cert, i) => (
                     <div key={i} className="list-item">
-                      <div className="list-marker cert"></div>
+                      <div className="list-marker certification"></div>
                       <div className="list-content">
-                        <p className="list-title">{cert.name}</p>
-                        <p className="list-subtitle">{cert.issuer}</p>
+                        <p className="list-title">{cert.name || 'N/A'}</p>
+                        {cert.issuer && <p className="list-subtitle">{cert.issuer}</p>}
                         {cert.date && <p className="list-meta">{cert.date}</p>}
+                        {cert.credentialId && (
+                          <p className="list-meta credential-id">{cert.credentialId}</p>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -369,10 +412,62 @@ const App = () => {
               </div>
             )}
 
-            {/* Scraped Info */}
+            {/* Projects */}
+            {result.data.projects && result.data.projects.length > 0 && (
+              <div className="data-card">
+                <h3 className="card-title">
+                  <FileText className="title-icon" />
+                  Projects
+                  <span className="count-badge">{result.data.projects.length}</span>
+                </h3>
+                <div className="list-container">
+                  {result.data.projects.map((proj, i) => (
+                    <div key={i} className="list-item">
+                      <div className="list-marker project"></div>
+                      <div className="list-content">
+                        <p className="list-title">{proj.name || 'N/A'}</p>
+                        {proj.date && <p className="list-meta">{proj.date}</p>}
+                        {proj.association && <p className="list-meta">{proj.association}</p>}
+                        {proj.description && (
+                          <p className="list-description">{proj.description}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Languages */}
+            {result.data.languages && result.data.languages.length > 0 && (
+              <div className="data-card">
+                <h3 className="card-title">
+                  <Globe className="title-icon" />
+                  Languages
+                  <span className="count-badge">{result.data.languages.length}</span>
+                </h3>
+                <div className="tags-container">
+                  {result.data.languages.map((lang, i) => (
+                    <span key={i} className="tag language-tag">
+                      {lang}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Footer Info */}
             <div className="scraped-info">
-              <p>Scraped at: {new Date(result.scrapedAt).toLocaleString()}</p>
-              <p>Profile URL: <a href={result.profileUrl} target="_blank" rel="noopener noreferrer">{result.profileUrl}</a></p>
+              <div className="info-row">
+                <span className="info-label">Profile URL:</span>
+                <a href={result.profileUrl} target="_blank" rel="noopener noreferrer" className="info-link">
+                  {result.profileUrl}
+                </a>
+              </div>
+              <div className="info-row">
+                <span className="info-label">Scraped At:</span>
+                <span className="info-value">{new Date(result.scrapedAt).toLocaleString()}</span>
+              </div>
             </div>
           </div>
         )}
