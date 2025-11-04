@@ -1,5 +1,10 @@
-// LinkedIn Profile Scraper - server.js (ROBUST FIXED VERSION)
-// Install: npm install express playwright-extra puppeteer-extra-plugin-stealth cors dotenv
+// OPTIMIZED LinkedIn Profile Scraper - Faster without detection
+// Key optimizations:
+// 1. Reduced delays to minimum safe values
+// 2. Parallel operations where possible
+// 3. Smarter waiting strategies
+// 4. Optimized scrolling
+// 5. Early data extraction
 
 const express = require('express');
 const { chromium } = require('playwright-extra');
@@ -67,22 +72,23 @@ class LinkedInScraper {
       console.log('🔐 Logging into LinkedIn...');
       
       await this.page.goto('https://www.linkedin.com/login', { 
-        waitUntil: 'networkidle',
-        timeout: 60000 
+        waitUntil: 'domcontentloaded', // Faster than networkidle
+        timeout: 30000 
       });
 
-      await this.randomDelay(2000, 3000);
+      // Reduced delays
+      await this.randomDelay(1000, 1500);
 
       await this.page.fill('#username', email);
-      await this.randomDelay(800, 1500);
+      await this.randomDelay(400, 700);
 
       await this.page.fill('#password', password);
-      await this.randomDelay(800, 1500);
+      await this.randomDelay(400, 700);
 
       await this.page.click('button[type="submit"]');
       
-      await this.page.waitForURL('**/feed/**', { timeout: 30000 }).catch(() => {});
-      await this.randomDelay(3000, 5000);
+      await this.page.waitForURL('**/feed/**', { timeout: 25000 }).catch(() => {});
+      await this.randomDelay(1500, 2000); // Reduced from 3-5s
 
       const currentUrl = this.page.url();
       if (currentUrl.includes('/feed') || currentUrl.includes('/mynetwork')) {
@@ -92,7 +98,6 @@ class LinkedInScraper {
         return true;
       } else if (currentUrl.includes('/checkpoint/challenge')) {
         console.log('⚠️  Security checkpoint detected - waiting for manual verification...');
-        console.log('👉 Please complete the verification in the browser window');
         await this.page.waitForURL('**/feed/**', { timeout: 120000 }).catch(() => {});
         this.isLoggedIn = true;
         this.loginInProgress = false;
@@ -117,18 +122,25 @@ class LinkedInScraper {
       }
 
       console.log(`\n🔍 Scraping profile: ${profileUrl}`);
+      const startTime = Date.now();
       
+      // Use domcontentloaded instead of networkidle for faster loading
       await this.page.goto(profileUrl, { 
         waitUntil: 'domcontentloaded',
-        timeout: 60000 
+        timeout: 30000 
       });
 
-      await this.page.waitForSelector('.pv-text-details__left-panel, .ph5', { timeout: 10000 }).catch(() => {});
-      await this.randomDelay(3000, 5000);
+      // Wait for key element with shorter timeout
+      await this.page.waitForSelector('.pv-text-details__left-panel, .ph5', { timeout: 5000 }).catch(() => {});
+      await this.randomDelay(1000, 1500); // Reduced initial wait
       
-      console.log('📜 Starting advanced scroll and section expansion...');
-      await this.advancedScroll();
-      await this.randomDelay(3000, 4000);
+      console.log('📜 Starting optimized scroll and expansion...');
+      
+      // Run scroll and data extraction in parallel
+      await Promise.all([
+        this.optimizedScroll(),
+        this.waitForDataLoad()
+      ]);
 
       const profileData = await this.page.evaluate(() => {
         const utils = {
@@ -161,16 +173,10 @@ class LinkedInScraper {
             return Array.from(texts);
           },
 
-          // IMPROVED: Find section with multiple strategies
           findSection: (sectionId) => {
-            console.log(`Looking for section: ${sectionId}`);
-            
-            // Strategy 1: Direct ID lookup
+            // Direct ID lookup first (fastest)
             let section = document.querySelector(`#${sectionId}`);
             if (section) {
-              console.log(`  ✓ Found by ID: #${sectionId}`);
-              
-              // Try multiple container patterns
               const containers = [
                 section.closest('section')?.querySelector('.pvs-list__outer-container'),
                 section.closest('section')?.querySelector('ul.pvs-list'),
@@ -180,39 +186,21 @@ class LinkedInScraper {
               ];
               
               for (const container of containers) {
-                if (container) {
-                  console.log(`  ✓ Found container`);
-                  return container;
-                }
+                if (container) return container;
               }
             }
 
-            // Strategy 2: Find by section heading text
-            const headings = document.querySelectorAll('h2, h3, div[id*="' + sectionId + '"]');
+            // Fallback: heading text search
+            const headings = document.querySelectorAll('h2, h3');
             for (const heading of headings) {
               const text = utils.getText(heading)?.toLowerCase();
               if (text?.includes(sectionId.replace(/_/g, ' '))) {
-                console.log(`  ✓ Found by heading text: "${text}"`);
                 const container = heading.closest('section')?.querySelector('ul') || 
                                 heading.parentElement?.querySelector('ul');
                 if (container) return container;
               }
             }
 
-            // Strategy 3: Find all sections and match by content
-            const sections = document.querySelectorAll('section.artdeco-card, section');
-            for (const sec of sections) {
-              const h2 = sec.querySelector('h2');
-              if (h2) {
-                const text = utils.getText(h2)?.toLowerCase();
-                if (text?.includes(sectionId.replace(/_/g, ' '))) {
-                  console.log(`  ✓ Found by section content: "${text}"`);
-                  return sec.querySelector('ul');
-                }
-              }
-            }
-
-            console.log(`  ✗ Section not found: ${sectionId}`);
             return null;
           },
 
@@ -225,7 +213,6 @@ class LinkedInScraper {
           }
         };
 
-        // NAME
         const getName = () => {
           const selectors = [
             'h1.text-heading-xlarge',
@@ -237,7 +224,6 @@ class LinkedInScraper {
           return utils.trySelectors(selectors);
         };
 
-        // HEADLINE
         const getHeadline = () => {
           const selectors = [
             '.text-body-medium.break-words',
@@ -251,7 +237,6 @@ class LinkedInScraper {
           return null;
         };
 
-        // LOCATION
         const getLocation = () => {
           const selectors = [
             '.text-body-small.inline.t-black--light.break-words',
@@ -263,7 +248,6 @@ class LinkedInScraper {
                  texts.find(t => t.length > 3 && !t.includes('connection')) || null;
         };
 
-        // ABOUT
         const getAbout = () => {
           const aboutSection = utils.findSection('about');
           if (!aboutSection) return null;
@@ -276,7 +260,6 @@ class LinkedInScraper {
           return null;
         };
 
-        // PROFILE IMAGE
         const getProfileImage = () => {
           const selectors = [
             '.pv-top-card-profile-picture__image--show img',
@@ -295,7 +278,6 @@ class LinkedInScraper {
           return null;
         };
 
-        // CONNECTIONS
         const getConnections = () => {
           const texts = utils.getAllText([
             '.pv-top-card--list-bullet li',
@@ -305,23 +287,14 @@ class LinkedInScraper {
           return texts.find(t => t.toLowerCase().includes('connection')) || null;
         };
 
-        // EXPERIENCE - ROBUST
         const getExperience = () => {
-          console.log('Extracting Experience...');
           const container = utils.findSection('experience');
-          if (!container) {
-            console.log('  ✗ Experience container not found');
-            return [];
-          }
+          if (!container) return [];
 
           const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
-          console.log(`  Found ${items.length} experience items`);
           
-          return Array.from(items).map((item, idx) => {
+          return Array.from(items).map((item) => {
             const spans = utils.extractSpanTexts(item);
-            console.log(`  Item ${idx + 1} spans:`, spans);
-            
-            // Find all links and bold text
             const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
               .map(s => utils.getText(s)).filter(t => t);
             
@@ -338,22 +311,14 @@ class LinkedInScraper {
           .slice(0, 15);
         };
 
-        // EDUCATION - ROBUST
         const getEducation = () => {
-          console.log('Extracting Education...');
           const container = utils.findSection('education');
-          if (!container) {
-            console.log('  ✗ Education container not found');
-            return [];
-          }
+          if (!container) return [];
 
           const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
-          console.log(`  Found ${items.length} education items`);
           
-          return Array.from(items).map((item, idx) => {
+          return Array.from(items).map((item) => {
             const spans = utils.extractSpanTexts(item);
-            console.log(`  Item ${idx + 1} spans:`, spans);
-
             const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
               .map(s => utils.getText(s)).filter(t => t);
 
@@ -368,18 +333,12 @@ class LinkedInScraper {
           .slice(0, 10);
         };
 
-        // SKILLS - ROBUST
         const getSkills = () => {
-          console.log('Extracting Skills...');
           const container = utils.findSection('skills');
-          if (!container) {
-            console.log('  ✗ Skills container not found');
-            return [];
-          }
+          if (!container) return [];
 
           const skills = new Set();
           const skillElements = container.querySelectorAll('a[href*="/skills/"], .hoverable-link-text.t-bold');
-          console.log(`  Found ${skillElements.length} skill elements`);
           
           skillElements.forEach(el => {
             const span = el.querySelector('span[aria-hidden="true"]');
@@ -392,22 +351,14 @@ class LinkedInScraper {
           return Array.from(skills).slice(0, 50);
         };
 
-        // CERTIFICATIONS - ROBUST
         const getCertifications = () => {
-          console.log('Extracting Certifications...');
           const container = utils.findSection('licenses_and_certifications');
-          if (!container) {
-            console.log('  ✗ Certifications container not found');
-            return [];
-          }
+          if (!container) return [];
 
           const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
-          console.log(`  Found ${items.length} certification items`);
           
-          return Array.from(items).map((item, idx) => {
+          return Array.from(items).map((item) => {
             const spans = utils.extractSpanTexts(item);
-            console.log(`  Item ${idx + 1} spans:`, spans);
-
             const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
               .map(s => utils.getText(s)).filter(t => t);
 
@@ -422,22 +373,14 @@ class LinkedInScraper {
           .slice(0, 15);
         };
 
-        // PROJECTS - ROBUST
         const getProjects = () => {
-          console.log('Extracting Projects...');
           const container = utils.findSection('projects');
-          if (!container) {
-            console.log('  ✗ Projects container not found');
-            return [];
-          }
+          if (!container) return [];
 
           const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
-          console.log(`  Found ${items.length} project items`);
           
-          return Array.from(items).map((item, idx) => {
+          return Array.from(items).map((item) => {
             const spans = utils.extractSpanTexts(item);
-            console.log(`  Item ${idx + 1} spans:`, spans);
-            
             const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
             const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
               .map(s => utils.getText(s)).filter(t => t);
@@ -452,18 +395,12 @@ class LinkedInScraper {
           .slice(0, 10);
         };
 
-        // LANGUAGES - ROBUST
         const getLanguages = () => {
-          console.log('Extracting Languages...');
           const container = utils.findSection('languages');
-          if (!container) {
-            console.log('  ✗ Languages container not found');
-            return [];
-          }
+          if (!container) return [];
 
           const languages = [];
           const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
-          console.log(`  Found ${items.length} language items`);
           
           items.forEach(item => {
             const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
@@ -493,8 +430,11 @@ class LinkedInScraper {
         };
       });
 
+      const timeTaken = ((Date.now() - startTime) / 1000).toFixed(2);
+      
       console.log('\n✅ SCRAPING COMPLETED!');
       console.log('═══════════════════════════════════════');
+      console.log(`⏱️  Time taken: ${timeTaken}s`);
       console.log(`📛 Name: ${profileData.name || '❌ NOT FOUND'}`);
       console.log(`💼 Headline: ${profileData.headline || '❌ NOT FOUND'}`);
       console.log(`📍 Location: ${profileData.location || '❌ NOT FOUND'}`);
@@ -513,7 +453,8 @@ class LinkedInScraper {
         success: true,
         data: profileData,
         scrapedAt: new Date().toISOString(),
-        profileUrl: profileUrl
+        profileUrl: profileUrl,
+        timeTaken: `${timeTaken}s`
       };
 
     } catch (error) {
@@ -526,68 +467,71 @@ class LinkedInScraper {
     }
   }
 
-  async advancedScroll() {
-    console.log('📜 Advanced scrolling with section expansion...');
+  // OPTIMIZED: Faster scrolling with smart waiting
+  async optimizedScroll() {
+    console.log('📜 Optimized scrolling...');
     
-    // Phase 1: Initial scroll
-    for (let i = 0; i < 6; i++) {
+    // Phase 1: Quick initial scroll (4 steps instead of 6)
+    for (let i = 0; i < 4; i++) {
       await this.page.evaluate((i) => {
         window.scrollTo({
-          top: (i + 1) * (document.body.scrollHeight / 6),
+          top: (i + 1) * (document.body.scrollHeight / 4),
           behavior: 'smooth'
         });
       }, i);
-      await this.randomDelay(2500, 3500);
+      await this.randomDelay(1200, 1800); // Reduced from 2500-3500ms
     }
 
-    // Phase 2: Click ALL "Show all" / "Show more" buttons
-    await this.randomDelay(2000, 3000);
+    // Phase 2: Expand buttons (single pass, parallel clicks)
+    await this.randomDelay(800, 1200);
     
-    // Find and click expand buttons multiple times
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const buttons = await this.page.$$('button:has-text("Show all"), button:has-text("show more"), button[aria-label*="Show all"], button[aria-expanded="false"]').catch(() => []);
-      console.log(`   Attempt ${attempt + 1}: Found ${buttons.length} expand buttons`);
+    try {
+      const buttons = await this.page.$$('button:has-text("Show all"), button:has-text("show more"), button[aria-label*="Show all"]').catch(() => []);
+      console.log(`   Found ${buttons.length} expand buttons`);
       
-      for (let i = 0; i < buttons.length; i++) {
+      // Click up to 5 buttons in parallel (safe limit)
+      const clickPromises = buttons.slice(0, 5).map(async (button, i) => {
         try {
-          await buttons[i].scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-          await buttons[i].click({ timeout: 3000 });
+          await button.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
+          await button.click({ timeout: 2000 });
           console.log(`   ✓ Clicked button ${i + 1}`);
-          await this.randomDelay(2000, 3000);
         } catch (e) {
-          // Button not clickable or already expanded
+          // Ignore if button not clickable
         }
-      }
+      });
       
-      await this.randomDelay(1500, 2500);
+      await Promise.all(clickPromises);
+      await this.randomDelay(1500, 2000);
+    } catch (e) {
+      console.log('   Button expansion skipped');
     }
 
-    // Phase 3: Scroll through each major section
-    const sections = ['experience', 'education', 'skills', 'licenses_and_certifications', 'projects', 'languages'];
-    for (const section of sections) {
-      try {
-        await this.page.evaluate((sectionId) => {
-          const el = document.querySelector(`#${sectionId}`);
-          if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-        }, section);
-        await this.randomDelay(2000, 3000);
-      } catch (e) {}
-    }
-
-    // Phase 4: Final full scroll
+    // Phase 3: Quick final scroll
     await this.page.evaluate(() => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
     });
-    await this.randomDelay(3000, 4000);
+    await this.randomDelay(1500, 2000);
 
-    await this.page.evaluate(() => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
-    await this.randomDelay(2000, 3000);
+    console.log('✅ Optimized scrolling completed');
+  }
 
-    console.log('✅ Advanced scrolling completed');
+  // NEW: Wait for key data to load without excessive delays
+  async waitForDataLoad() {
+    await this.randomDelay(1000, 1500);
+    
+    // Wait for at least one section to be fully loaded
+    const sections = ['experience', 'education', 'skills'];
+    for (const section of sections) {
+      const loaded = await this.page.evaluate((sectionId) => {
+        const el = document.querySelector(`#${sectionId}`);
+        return el !== null;
+      }, section);
+      
+      if (loaded) {
+        break;
+      }
+      await this.randomDelay(500, 800);
+    }
   }
 
   async randomDelay(min, max) {
@@ -627,7 +571,7 @@ const startAutoScraper = async () => {
     return;
   }
 
-  console.log('\n🚀 AUTO-LOGIN MODE ENABLED');
+  console.log('\n🚀 AUTO-LOGIN MODE ENABLED (OPTIMIZED)');
   console.log('📧 Email:', email);
   console.log('🔑 Password: ' + '*'.repeat(password.length) + '\n');
 
@@ -644,7 +588,7 @@ const startAutoScraper = async () => {
       loginStatus.loginInProgress = false;
       loginStatus.error = null;
       console.log('\n✅ AUTO-LOGIN COMPLETED!');
-      console.log('🎯 Ready to scrape profiles!');
+      console.log('🎯 Ready to scrape profiles (FASTER MODE)!');
       console.log('\n📌 Open the UI: http://localhost:3001');
       console.log('📌 Or use API: POST http://localhost:3001/api/scrape-profile\n');
     } else {
@@ -722,7 +666,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'linkedin-scraper',
-    version: '5.0.0-robust',
+    version: '6.0.0-optimized',
     loginStatus: loginStatus
   });
 });
