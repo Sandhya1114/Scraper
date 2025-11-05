@@ -1,10 +1,5 @@
-// OPTIMIZED LinkedIn Profile Scraper - Faster without detection
-// Key optimizations:
-// 1. Reduced delays to minimum safe values
-// 2. Parallel operations where possible
-// 3. Smarter waiting strategies
-// 4. Optimized scrolling
-// 5. Early data extraction
+// FIXED LinkedIn Profile Scraper - Experience Section Fixed
+// Key fix: Improved section detection to correctly identify Experience vs Education
 
 const express = require('express');
 const { chromium } = require('playwright-extra');
@@ -72,11 +67,10 @@ class LinkedInScraper {
       console.log('🔐 Logging into LinkedIn...');
       
       await this.page.goto('https://www.linkedin.com/login', { 
-        waitUntil: 'domcontentloaded', // Faster than networkidle
+        waitUntil: 'domcontentloaded',
         timeout: 30000 
       });
 
-      // Reduced delays
       await this.randomDelay(1000, 1500);
 
       await this.page.fill('#username', email);
@@ -88,7 +82,7 @@ class LinkedInScraper {
       await this.page.click('button[type="submit"]');
       
       await this.page.waitForURL('**/feed/**', { timeout: 25000 }).catch(() => {});
-      await this.randomDelay(1500, 2000); // Reduced from 3-5s
+      await this.randomDelay(1500, 2000);
 
       const currentUrl = this.page.url();
       if (currentUrl.includes('/feed') || currentUrl.includes('/mynetwork')) {
@@ -124,19 +118,16 @@ class LinkedInScraper {
       console.log(`\n🔍 Scraping profile: ${profileUrl}`);
       const startTime = Date.now();
       
-      // Use domcontentloaded instead of networkidle for faster loading
       await this.page.goto(profileUrl, { 
         waitUntil: 'domcontentloaded',
         timeout: 30000 
       });
 
-      // Wait for key element with shorter timeout
       await this.page.waitForSelector('.pv-text-details__left-panel, .ph5', { timeout: 5000 }).catch(() => {});
-      await this.randomDelay(1000, 1500); // Reduced initial wait
+      await this.randomDelay(1000, 1500);
       
       console.log('📜 Starting optimized scroll and expansion...');
       
-      // Run scroll and data extraction in parallel
       await Promise.all([
         this.optimizedScroll(),
         this.waitForDataLoad()
@@ -174,33 +165,54 @@ class LinkedInScraper {
           },
 
           findSection: (sectionId) => {
-            // Direct ID lookup first (fastest)
-            let section = document.querySelector(`#${sectionId}`);
+            console.log(`Searching for section: ${sectionId}`);
+            
+            // Map section IDs to possible heading texts
+            const sectionHeadings = {
+              'experience': ['Experience'],
+              'education': ['Education'],
+              'skills': ['Skills'],
+              'licenses_and_certifications': ['Licenses & certifications', 'Certifications'],
+              'projects': ['Projects'],
+              'languages': ['Languages']
+            };
+
+            const headingTexts = sectionHeadings[sectionId] || [sectionId];
+
+            // Try to find by ID first
+            let section = document.getElementById(sectionId);
             if (section) {
-              const containers = [
-                section.closest('section')?.querySelector('.pvs-list__outer-container'),
-                section.closest('section')?.querySelector('ul.pvs-list'),
-                section.parentElement?.querySelector('.pvs-list'),
-                section.parentElement?.nextElementSibling?.querySelector('ul'),
-                section.closest('section')?.querySelector('ul')
-              ];
-              
-              for (const container of containers) {
-                if (container) return container;
+              console.log(`Found section by ID: ${sectionId}`);
+              const container = section.closest('section')?.querySelector('ul.pvs-list') ||
+                              section.closest('section')?.querySelector('.pvs-list__outer-container ul') ||
+                              section.parentElement?.nextElementSibling?.querySelector('ul');
+              if (container) return container;
+            }
+
+            // Try to find by heading text (most reliable)
+            const allSections = document.querySelectorAll('section');
+            for (const sec of allSections) {
+              const h2 = sec.querySelector('h2');
+              if (h2) {
+                const headingText = utils.getText(h2);
+                console.log(`Checking section with heading: "${headingText}"`);
+                
+                if (headingText) {
+                  for (const expectedHeading of headingTexts) {
+                    if (headingText.toLowerCase() === expectedHeading.toLowerCase() ||
+                        headingText.toLowerCase().startsWith(expectedHeading.toLowerCase())) {
+                      console.log(`✓ Found ${sectionId} section!`);
+                      const container = sec.querySelector('ul.pvs-list') ||
+                                      sec.querySelector('.pvs-list__outer-container ul') ||
+                                      sec.querySelector('ul');
+                      if (container) return container;
+                    }
+                  }
+                }
               }
             }
 
-            // Fallback: heading text search
-            const headings = document.querySelectorAll('h2, h3');
-            for (const heading of headings) {
-              const text = utils.getText(heading)?.toLowerCase();
-              if (text?.includes(sectionId.replace(/_/g, ' '))) {
-                const container = heading.closest('section')?.querySelector('ul') || 
-                                heading.parentElement?.querySelector('ul');
-                if (container) return container;
-              }
-            }
-
+            console.log(`✗ Section ${sectionId} not found`);
             return null;
           },
 
@@ -288,49 +300,75 @@ class LinkedInScraper {
         };
 
         const getExperience = () => {
+          console.log('=== Getting Experience ===');
           const container = utils.findSection('experience');
-          if (!container) return [];
+          if (!container) {
+            console.log('Experience container not found');
+            return [];
+          }
 
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
+          console.log('Experience container found!');
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item, li.pvs-list__item--line-separated');
+          console.log(`Found ${items.length} experience items`);
           
-          return Array.from(items).map((item) => {
+          const experiences = Array.from(items).map((item, index) => {
+            console.log(`\n--- Experience Item ${index + 1} ---`);
             const spans = utils.extractSpanTexts(item);
+            console.log('All spans:', spans);
+            
             const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
               .map(s => utils.getText(s)).filter(t => t);
+            console.log('Bold texts:', boldTexts);
             
             const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
 
             let title = boldTexts[0] || spans[0] || null;
-            let company = boldTexts[1] || spans[1] || null;
-            let duration = spans.find(s => s.match(/\d{4}|yr|mo/i)) || null;
+            let company = boldTexts[1] || spans.find(s => s !== title && !s.match(/\d{4}/) && !s.match(/yr|mo/i)) || null;
+            let duration = spans.find(s => s.match(/\d{4}|yr|mo|present/i)) || null;
             let location = spans.find(s => s.includes(',') && !s.match(/\d{4}/)) || null;
 
+            console.log('Extracted:', { title, company, duration, location });
             return { title, company, duration, location, description };
           })
-          .filter(exp => exp.title || exp.company)
-          .slice(0, 15);
+          .filter(exp => exp.title || exp.company);
+          
+          console.log(`=== Total ${experiences.length} valid experiences ===`);
+          return experiences.slice(0, 15);
         };
 
         const getEducation = () => {
+          console.log('=== Getting Education ===');
           const container = utils.findSection('education');
-          if (!container) return [];
+          if (!container) {
+            console.log('Education container not found');
+            return [];
+          }
 
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
+          console.log('Education container found!');
+          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item, li.pvs-list__item--line-separated');
+          console.log(`Found ${items.length} education items`);
           
-          return Array.from(items).map((item) => {
+          const education = Array.from(items).map((item, index) => {
+            console.log(`\n--- Education Item ${index + 1} ---`);
             const spans = utils.extractSpanTexts(item);
+            console.log('All spans:', spans);
+            
             const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
               .map(s => utils.getText(s)).filter(t => t);
+            console.log('Bold texts:', boldTexts);
 
             let school = boldTexts[0] || spans[0] || null;
             let degree = spans.find(s => s.match(/Bachelor|Master|B\.?Tech|M\.?Tech|PhD|Degree|Diploma/i)) || boldTexts[1] || spans[1] || null;
             let field = spans[2] || null;
             let duration = spans.find(s => s.match(/\d{4}|20\d{2}/)) || null;
 
+            console.log('Extracted:', { school, degree, field, duration });
             return { school, degree, field, duration };
           })
-          .filter(edu => edu.school)
-          .slice(0, 10);
+          .filter(edu => edu.school);
+          
+          console.log(`=== Total ${education.length} valid education entries ===`);
+          return education.slice(0, 10);
         };
 
         const getSkills = () => {
@@ -467,11 +505,9 @@ class LinkedInScraper {
     }
   }
 
-  // OPTIMIZED: Faster scrolling with smart waiting
   async optimizedScroll() {
     console.log('📜 Optimized scrolling...');
     
-    // Phase 1: Quick initial scroll (4 steps instead of 6)
     for (let i = 0; i < 4; i++) {
       await this.page.evaluate((i) => {
         window.scrollTo({
@@ -479,17 +515,15 @@ class LinkedInScraper {
           behavior: 'smooth'
         });
       }, i);
-      await this.randomDelay(1200, 1800); // Reduced from 2500-3500ms
+      await this.randomDelay(1200, 1800);
     }
 
-    // Phase 2: Expand buttons (single pass, parallel clicks)
     await this.randomDelay(800, 1200);
     
     try {
       const buttons = await this.page.$$('button:has-text("Show all"), button:has-text("show more"), button[aria-label*="Show all"]').catch(() => []);
       console.log(`   Found ${buttons.length} expand buttons`);
       
-      // Click up to 5 buttons in parallel (safe limit)
       const clickPromises = buttons.slice(0, 5).map(async (button, i) => {
         try {
           await button.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
@@ -506,7 +540,6 @@ class LinkedInScraper {
       console.log('   Button expansion skipped');
     }
 
-    // Phase 3: Quick final scroll
     await this.page.evaluate(() => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
     });
@@ -515,11 +548,9 @@ class LinkedInScraper {
     console.log('✅ Optimized scrolling completed');
   }
 
-  // NEW: Wait for key data to load without excessive delays
   async waitForDataLoad() {
     await this.randomDelay(1000, 1500);
     
-    // Wait for at least one section to be fully loaded
     const sections = ['experience', 'education', 'skills'];
     for (const section of sections) {
       const loaded = await this.page.evaluate((sectionId) => {
@@ -571,7 +602,7 @@ const startAutoScraper = async () => {
     return;
   }
 
-  console.log('\n🚀 AUTO-LOGIN MODE ENABLED (OPTIMIZED)');
+  console.log('\n🚀 AUTO-LOGIN MODE ENABLED (FIXED VERSION)');
   console.log('📧 Email:', email);
   console.log('🔑 Password: ' + '*'.repeat(password.length) + '\n');
 
@@ -588,7 +619,7 @@ const startAutoScraper = async () => {
       loginStatus.loginInProgress = false;
       loginStatus.error = null;
       console.log('\n✅ AUTO-LOGIN COMPLETED!');
-      console.log('🎯 Ready to scrape profiles (FASTER MODE)!');
+      console.log('🎯 Ready to scrape profiles (Experience section fixed)!');
       console.log('\n📌 Open the UI: http://localhost:3001');
       console.log('📌 Or use API: POST http://localhost:3001/api/scrape-profile\n');
     } else {
@@ -666,7 +697,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'linkedin-scraper',
-    version: '6.0.0-optimized',
+    version: '6.1.0-fixed',
     loginStatus: loginStatus
   });
 });
