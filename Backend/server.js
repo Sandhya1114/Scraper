@@ -109,401 +109,545 @@ class LinkedInScraper {
     }
   }
 
-  async scrapeProfile(profileUrl) {
+async enhancedScroll() {
+  console.log('📜 Enhanced scrolling with section expansion...');
+  
+  // Scroll down slowly in more steps
+  for (let i = 0; i < 8; i++) {
+    await this.page.evaluate((i) => {
+      window.scrollTo({
+        top: (i + 1) * (document.body.scrollHeight / 8),
+        behavior: 'smooth'
+      });
+    }, i);
+    await this.randomDelay(1500, 2000);
+    
+    // Try to click "Show all" buttons at each scroll position
     try {
-      if (!this.isLoggedIn) {
-        throw new Error('Not logged in');
+      const buttons = await this.page.$$('button:has-text("Show all"), button:has-text("show more")').catch(() => []);
+      for (const button of buttons.slice(0, 2)) {
+        try {
+          await button.click({ timeout: 1000 });
+          await this.randomDelay(800, 1200);
+        } catch (e) {
+          // Button not clickable, continue
+        }
       }
-
-      console.log(`\n🔍 Scraping profile: ${profileUrl}`);
-      const startTime = Date.now();
-      
-      await this.page.goto(profileUrl, { 
-        waitUntil: 'domcontentloaded',
-        timeout: 30000 
-      });
-
-      await this.page.waitForSelector('.pv-text-details__left-panel, .ph5', { timeout: 5000 }).catch(() => {});
-      await this.randomDelay(1000, 1500);
-      
-      console.log('📜 Starting optimized scroll and expansion...');
-      
-      await Promise.all([
-        this.optimizedScroll(),
-        this.waitForDataLoad()
-      ]);
-
-      const profileData = await this.page.evaluate(() => {
-        const utils = {
-          getText: (element) => {
-            if (!element) return null;
-            const text = (element.innerText || element.textContent || '').trim();
-            return text.length > 0 ? text : null;
-          },
-
-          trySelectors: (selectors) => {
-            for (const selector of selectors) {
-              const el = document.querySelector(selector);
-              if (el) {
-                const text = utils.getText(el);
-                if (text) return text;
-              }
-            }
-            return null;
-          },
-
-          getAllText: (selectors) => {
-            const texts = new Set();
-            for (const selector of selectors) {
-              const elements = document.querySelectorAll(selector);
-              elements.forEach(el => {
-                const text = utils.getText(el);
-                if (text) texts.add(text);
-              });
-            }
-            return Array.from(texts);
-          },
-
-          findSection: (sectionId) => {
-            console.log(`Searching for section: ${sectionId}`);
-            
-            // Map section IDs to possible heading texts
-            const sectionHeadings = {
-              'experience': ['Experience'],
-              'education': ['Education'],
-              'skills': ['Skills'],
-              'licenses_and_certifications': ['Licenses & certifications', 'Certifications'],
-              'projects': ['Projects'],
-              'languages': ['Languages']
-            };
-
-            const headingTexts = sectionHeadings[sectionId] || [sectionId];
-
-            // Try to find by ID first
-            let section = document.getElementById(sectionId);
-            if (section) {
-              console.log(`Found section by ID: ${sectionId}`);
-              const container = section.closest('section')?.querySelector('ul.pvs-list') ||
-                              section.closest('section')?.querySelector('.pvs-list__outer-container ul') ||
-                              section.parentElement?.nextElementSibling?.querySelector('ul');
-              if (container) return container;
-            }
-
-            // Try to find by heading text (most reliable)
-            const allSections = document.querySelectorAll('section');
-            for (const sec of allSections) {
-              const h2 = sec.querySelector('h2');
-              if (h2) {
-                const headingText = utils.getText(h2);
-                console.log(`Checking section with heading: "${headingText}"`);
-                
-                if (headingText) {
-                  for (const expectedHeading of headingTexts) {
-                    if (headingText.toLowerCase() === expectedHeading.toLowerCase() ||
-                        headingText.toLowerCase().startsWith(expectedHeading.toLowerCase())) {
-                      console.log(`✓ Found ${sectionId} section!`);
-                      const container = sec.querySelector('ul.pvs-list') ||
-                                      sec.querySelector('.pvs-list__outer-container ul') ||
-                                      sec.querySelector('ul');
-                      if (container) return container;
-                    }
-                  }
-                }
-              }
-            }
-
-            console.log(`✗ Section ${sectionId} not found`);
-            return null;
-          },
-
-          extractSpanTexts: (container) => {
-            if (!container) return [];
-            const spans = container.querySelectorAll('span[aria-hidden="true"]');
-            return Array.from(spans)
-              .map(s => utils.getText(s))
-              .filter(t => t && t.length > 0);
-          }
-        };
-
-        const getName = () => {
-          const selectors = [
-            'h1.text-heading-xlarge',
-            'h1.inline.t-24',
-            '.pv-text-details__left-panel h1',
-            '.ph5 h1',
-            'h1'
-          ];
-          return utils.trySelectors(selectors);
-        };
-
-        const getHeadline = () => {
-          const selectors = [
-            '.text-body-medium.break-words',
-            '.pv-text-details__left-panel .text-body-medium',
-            'div.text-body-medium'
-          ];
-          const headline = utils.trySelectors(selectors);
-          if (headline && headline.length > 10 && !headline.includes('connection')) {
-            return headline;
-          }
-          return null;
-        };
-
-        const getLocation = () => {
-          const selectors = [
-            '.text-body-small.inline.t-black--light.break-words',
-            '.pv-text-details__left-panel .text-body-small',
-            'span.text-body-small.inline'
-          ];
-          const texts = utils.getAllText(selectors);
-          return texts.find(t => t.includes(',') || t.match(/India|USA|UK|Canada/i)) || 
-                 texts.find(t => t.length > 3 && !t.includes('connection')) || null;
-        };
-
-        const getAbout = () => {
-          const aboutSection = utils.findSection('about');
-          if (!aboutSection) return null;
-
-          const textElements = aboutSection.querySelectorAll('span[aria-hidden="true"]');
-          for (const el of textElements) {
-            const text = utils.getText(el);
-            if (text && text.length > 20) return text;
-          }
-          return null;
-        };
-
-        const getProfileImage = () => {
-          const selectors = [
-            '.pv-top-card-profile-picture__image--show img',
-            '.pv-top-card-profile-picture__image',
-            'img.pv-top-card-profile-picture__image',
-            'button img[class*="profile"]',
-            'img[src*="profile-displayphoto"]'
-          ];
-
-          for (const selector of selectors) {
-            const img = document.querySelector(selector);
-            if (img?.src && img.src.includes('http') && !img.src.includes('data:')) {
-              return img.src;
-            }
-          }
-          return null;
-        };
-
-        const getConnections = () => {
-          const texts = utils.getAllText([
-            '.pv-top-card--list-bullet li',
-            'span.t-bold span',
-            '.pv-top-card--list .text-body-small'
-          ]);
-          return texts.find(t => t.toLowerCase().includes('connection')) || null;
-        };
-
-        const getExperience = () => {
-          console.log('=== Getting Experience ===');
-          const container = utils.findSection('experience');
-          if (!container) {
-            console.log('Experience container not found');
-            return [];
-          }
-
-          console.log('Experience container found!');
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item, li.pvs-list__item--line-separated');
-          console.log(`Found ${items.length} experience items`);
-          
-          const experiences = Array.from(items).map((item, index) => {
-            console.log(`\n--- Experience Item ${index + 1} ---`);
-            const spans = utils.extractSpanTexts(item);
-            console.log('All spans:', spans);
-            
-            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
-              .map(s => utils.getText(s)).filter(t => t);
-            console.log('Bold texts:', boldTexts);
-            
-            const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
-
-            let title = boldTexts[0] || spans[0] || null;
-            let company = boldTexts[1] || spans.find(s => s !== title && !s.match(/\d{4}/) && !s.match(/yr|mo/i)) || null;
-            let duration = spans.find(s => s.match(/\d{4}|yr|mo|present/i)) || null;
-            let location = spans.find(s => s.includes(',') && !s.match(/\d{4}/)) || null;
-
-            console.log('Extracted:', { title, company, duration, location });
-            return { title, company, duration, location, description };
-          })
-          .filter(exp => exp.title || exp.company);
-          
-          console.log(`=== Total ${experiences.length} valid experiences ===`);
-          return experiences.slice(0, 15);
-        };
-
-        const getEducation = () => {
-          console.log('=== Getting Education ===');
-          const container = utils.findSection('education');
-          if (!container) {
-            console.log('Education container not found');
-            return [];
-          }
-
-          console.log('Education container found!');
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item, li.pvs-list__item--line-separated');
-          console.log(`Found ${items.length} education items`);
-          
-          const education = Array.from(items).map((item, index) => {
-            console.log(`\n--- Education Item ${index + 1} ---`);
-            const spans = utils.extractSpanTexts(item);
-            console.log('All spans:', spans);
-            
-            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
-              .map(s => utils.getText(s)).filter(t => t);
-            console.log('Bold texts:', boldTexts);
-
-            let school = boldTexts[0] || spans[0] || null;
-            let degree = spans.find(s => s.match(/Bachelor|Master|B\.?Tech|M\.?Tech|PhD|Degree|Diploma/i)) || boldTexts[1] || spans[1] || null;
-            let field = spans[2] || null;
-            let duration = spans.find(s => s.match(/\d{4}|20\d{2}/)) || null;
-
-            console.log('Extracted:', { school, degree, field, duration });
-            return { school, degree, field, duration };
-          })
-          .filter(edu => edu.school);
-          
-          console.log(`=== Total ${education.length} valid education entries ===`);
-          return education.slice(0, 10);
-        };
-
-        const getSkills = () => {
-          const container = utils.findSection('skills');
-          if (!container) return [];
-
-          const skills = new Set();
-          const skillElements = container.querySelectorAll('a[href*="/skills/"], .hoverable-link-text.t-bold');
-          
-          skillElements.forEach(el => {
-            const span = el.querySelector('span[aria-hidden="true"]');
-            const skill = utils.getText(span || el);
-            if (skill && skill.length > 1 && skill.length < 100 && !skill.match(/\d+ endorsement/i)) {
-              skills.add(skill);
-            }
-          });
-
-          return Array.from(skills).slice(0, 50);
-        };
-
-        const getCertifications = () => {
-          const container = utils.findSection('licenses_and_certifications');
-          if (!container) return [];
-
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
-          
-          return Array.from(items).map((item) => {
-            const spans = utils.extractSpanTexts(item);
-            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
-              .map(s => utils.getText(s)).filter(t => t);
-
-            let name = boldTexts[0] || spans[0] || null;
-            let issuer = boldTexts[1] || spans[1] || null;
-            let date = spans.find(s => s.includes('Issued') || s.match(/\w+ \d{4}/)) || null;
-            let credentialId = spans.find(s => s.toLowerCase().includes('credential')) || null;
-
-            return { name, issuer, date, credentialId };
-          })
-          .filter(cert => cert.name)
-          .slice(0, 15);
-        };
-
-        const getProjects = () => {
-          const container = utils.findSection('projects');
-          if (!container) return [];
-
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
-          
-          return Array.from(items).map((item) => {
-            const spans = utils.extractSpanTexts(item);
-            const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
-            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
-              .map(s => utils.getText(s)).filter(t => t);
-
-            let name = boldTexts[0] || spans[0] || null;
-            let date = spans.find(s => s.match(/\d{4}/)) || null;
-            let association = spans.find(s => s.includes('Associated')) || null;
-
-            return { name, date, association, description };
-          })
-          .filter(proj => proj.name)
-          .slice(0, 10);
-        };
-
-        const getLanguages = () => {
-          const container = utils.findSection('languages');
-          if (!container) return [];
-
-          const languages = [];
-          const items = container.querySelectorAll('li.pvs-list__paged-list-item, li.artdeco-list__item');
-          
-          items.forEach(item => {
-            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
-              .map(s => utils.getText(s)).filter(t => t);
-            const lang = boldTexts[0];
-            if (lang && lang.length > 1 && lang.length < 50 && !lang.includes('follower')) {
-              languages.push(lang);
-            }
-          });
-
-          return languages.slice(0, 10);
-        };
-
-        return {
-          name: getName(),
-          headline: getHeadline(),
-          location: getLocation(),
-          about: getAbout(),
-          profileImage: getProfileImage(),
-          connections: getConnections(),
-          experience: getExperience(),
-          education: getEducation(),
-          skills: getSkills(),
-          certifications: getCertifications(),
-          projects: getProjects(),
-          languages: getLanguages()
-        };
-      });
-
-      const timeTaken = ((Date.now() - startTime) / 1000).toFixed(2);
-      
-      console.log('\n✅ SCRAPING COMPLETED!');
-      console.log('═══════════════════════════════════════');
-      console.log(`⏱️  Time taken: ${timeTaken}s`);
-      console.log(`📛 Name: ${profileData.name || '❌ NOT FOUND'}`);
-      console.log(`💼 Headline: ${profileData.headline || '❌ NOT FOUND'}`);
-      console.log(`📍 Location: ${profileData.location || '❌ NOT FOUND'}`);
-      console.log(`🖼️  Profile Image: ${profileData.profileImage ? '✅ Found' : '❌ NOT FOUND'}`);
-      console.log(`📝 About: ${profileData.about ? '✅ Found (' + profileData.about.length + ' chars)' : '❌ NOT FOUND'}`);
-      console.log(`🔗 Connections: ${profileData.connections || '❌ NOT FOUND'}`);
-      console.log(`💼 Experience: ${profileData.experience.length} entries`);
-      console.log(`🎓 Education: ${profileData.education.length} entries`);
-      console.log(`⚡ Skills: ${profileData.skills.length} skills`);
-      console.log(`🏆 Certifications: ${profileData.certifications.length} certifications`);
-      console.log(`🚀 Projects: ${profileData.projects.length} projects`);
-      console.log(`🌐 Languages: ${profileData.languages.length} languages`);
-      console.log('═══════════════════════════════════════\n');
-
-      return {
-        success: true,
-        data: profileData,
-        scrapedAt: new Date().toISOString(),
-        profileUrl: profileUrl,
-        timeTaken: `${timeTaken}s`
-      };
-
-    } catch (error) {
-      console.error('❌ Scraping error:', error.message);
-      return {
-        success: false,
-        error: error.message,
-        profileUrl: profileUrl
-      };
+    } catch (e) {
+      // Ignore errors
     }
   }
+
+  // Final scroll to bottom
+  await this.page.evaluate(() => {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  });
+  await this.randomDelay(2000, 3000);
+
+  console.log('✅ Enhanced scrolling completed');
+}
+ async scrapeProfile(profileUrl) {
+  try {
+    if (!this.isLoggedIn) {
+      throw new Error('Not logged in');
+    }
+
+    console.log(`\n🔍 Scraping profile: ${profileUrl}`);
+    const startTime = Date.now();
+    
+    await this.page.goto(profileUrl, { 
+      waitUntil: 'networkidle',  // Changed from domcontentloaded
+      timeout: 30000 
+    });
+
+    // Wait longer for profile to load
+    await this.page.waitForSelector('.pv-text-details__left-panel, .ph5', { timeout: 10000 }).catch(() => {});
+    await this.randomDelay(2000, 3000);
+    
+    console.log('📜 Starting enhanced scroll and expansion...');
+    
+    // More aggressive scrolling
+    await this.enhancedScroll();
+    
+    console.log('⏳ Waiting for sections to load...');
+    await this.randomDelay(3000, 4000);
+
+    // Take a screenshot for debugging
+    await this.page.screenshot({ path: 'debug_profile.png', fullPage: true });
+    console.log('📸 Screenshot saved as debug_profile.png');
+
+    // Enhanced data extraction with detailed logging
+    const profileData = await this.page.evaluate(() => {
+      // Helper utilities
+      const utils = {
+        getText: (element) => {
+          if (!element) return null;
+          const text = (element.innerText || element.textContent || '').trim();
+          return text.length > 0 ? text : null;
+        },
+
+        trySelectors: (selectors) => {
+          for (const selector of selectors) {
+            const el = document.querySelector(selector);
+            if (el) {
+              const text = utils.getText(el);
+              if (text) return text;
+            }
+          }
+          return null;
+        },
+
+        getAllText: (selectors) => {
+          const texts = new Set();
+          for (const selector of selectors) {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => {
+              const text = utils.getText(el);
+              if (text) texts.add(text);
+            });
+          }
+          return Array.from(texts);
+        },
+
+        extractSpanTexts: (container) => {
+          if (!container) return [];
+          const spans = container.querySelectorAll('span[aria-hidden="true"]');
+          return Array.from(spans)
+            .map(s => utils.getText(s))
+            .filter(t => t && t.length > 0);
+        }
+      };
+
+      // ENHANCED: Log ALL sections with full details
+      console.log('\n========== COMPLETE PAGE ANALYSIS ==========');
+      const allSections = document.querySelectorAll('section');
+      console.log(`Total sections found: ${allSections.length}`);
+      
+      allSections.forEach((section, i) => {
+        console.log(`\n--- Section ${i} ---`);
+        
+        // Check for ID
+        const sectionId = section.id || 'no-id';
+        console.log(`  Section ID: "${sectionId}"`);
+        
+        // Check for IDs in children
+        const childWithId = section.querySelector('[id]');
+        if (childWithId) {
+          console.log(`  Child with ID: "${childWithId.id}"`);
+        }
+        
+        // Check all headings
+        const h2 = section.querySelector('h2');
+        const h3 = section.querySelector('h3');
+        const headingSpan = section.querySelector('div > div > span[aria-hidden="true"]');
+        
+        if (h2) console.log(`  H2: "${utils.getText(h2)}"`);
+        if (h3) console.log(`  H3: "${utils.getText(h3)}"`);
+        if (headingSpan) console.log(`  Heading Span: "${utils.getText(headingSpan)}"`);
+        
+        // Check for lists
+        const ul = section.querySelector('ul');
+        if (ul) {
+          const items = ul.querySelectorAll(':scope > li');
+          console.log(`  List items: ${items.length}`);
+          
+          // Log first item's content
+          if (items.length > 0) {
+            const firstItemText = utils.getText(items[0]);
+            console.log(`  First item preview: "${firstItemText ? firstItemText.substring(0, 100) : 'empty'}"`);
+          }
+        } else {
+          console.log(`  No list found`);
+        }
+        
+        // Check for class names that might help
+        const classes = section.className;
+        if (classes) {
+          console.log(`  Classes: ${classes}`);
+        }
+      });
+      console.log('\n========================================\n');
+
+      // ENHANCED: Find section with multiple fallback methods
+      const findSection = (sectionName) => {
+        console.log(`\n>>> Looking for "${sectionName}" section <<<`);
+        
+        // Method 1: Direct ID match on section
+        let section = document.getElementById(sectionName);
+        if (section && section.tagName === 'SECTION') {
+          console.log(`  ✓ Found section by direct ID`);
+          const list = section.querySelector('ul');
+          if (list) {
+            console.log(`  ✓ Found list with ${list.querySelectorAll(':scope > li').length} items`);
+            return list;
+          }
+        }
+
+        // Method 2: Find div with ID, then get parent section
+        const idDiv = document.getElementById(sectionName);
+        if (idDiv) {
+          console.log(`  ✓ Found div with ID`);
+          const parentSection = idDiv.closest('section');
+          if (parentSection) {
+            console.log(`  ✓ Found parent section`);
+            const list = parentSection.querySelector('ul');
+            if (list) {
+              console.log(`  ✓ Found list with ${list.querySelectorAll(':scope > li').length} items`);
+              return list;
+            }
+          }
+        }
+
+        // Method 3: Search by heading text
+        const allSections = document.querySelectorAll('section');
+        const searchTerms = [
+          sectionName.toLowerCase(),
+          sectionName.toLowerCase().replace('_', ' '),
+          sectionName.toLowerCase().replace('_and_', ' & ')
+        ];
+        
+        for (const sec of allSections) {
+          // Check h2
+          const h2 = sec.querySelector('h2');
+          if (h2) {
+            const h2Text = utils.getText(h2)?.toLowerCase() || '';
+            if (searchTerms.some(term => h2Text.includes(term))) {
+              console.log(`  ✓ Found by H2: "${h2Text}"`);
+              const list = sec.querySelector('ul');
+              if (list) {
+                console.log(`  ✓ Found list with ${list.querySelectorAll(':scope > li').length} items`);
+                return list;
+              }
+            }
+          }
+          
+          // Check heading span
+          const headingSpan = sec.querySelector('div > div > span[aria-hidden="true"]');
+          if (headingSpan) {
+            const spanText = utils.getText(headingSpan)?.toLowerCase() || '';
+            if (searchTerms.some(term => spanText.includes(term))) {
+              console.log(`  ✓ Found by heading span: "${spanText}"`);
+              const list = sec.querySelector('ul');
+              if (list) {
+                console.log(`  ✓ Found list with ${list.querySelectorAll(':scope > li').length} items`);
+                return list;
+              }
+            }
+          }
+        }
+
+        console.log(`  ✗ Section "${sectionName}" not found`);
+        return null;
+      };
+
+      // Basic info getters (unchanged)
+      const getName = () => {
+        const selectors = [
+          'h1.text-heading-xlarge',
+          'h1.inline.t-24',
+          '.pv-text-details__left-panel h1',
+          'h1'
+        ];
+        return utils.trySelectors(selectors);
+      };
+
+      const getHeadline = () => {
+        const selectors = [
+          '.text-body-medium.break-words',
+          '.pv-text-details__left-panel .text-body-medium',
+          'div.text-body-medium'
+        ];
+        const headline = utils.trySelectors(selectors);
+        if (headline && headline.length > 10 && !headline.includes('connection')) {
+          return headline;
+        }
+        return null;
+      };
+
+      const getLocation = () => {
+        const selectors = [
+          '.text-body-small.inline.t-black--light.break-words',
+          'span.text-body-small.inline'
+        ];
+        const texts = utils.getAllText(selectors);
+        return texts.find(t => t.includes(',') || t.match(/India|USA|UK|Canada/i)) || 
+               texts.find(t => t.length > 3 && !t.includes('connection')) || null;
+      };
+
+      const getAbout = () => {
+        const aboutList = findSection('about');
+        if (!aboutList) {
+          // Fallback: try direct selectors
+          const aboutSection = document.querySelector('section:has(#about), section:has([id*="about"])');
+          if (aboutSection) {
+            const spans = aboutSection.querySelectorAll('span[aria-hidden="true"]');
+            for (const span of spans) {
+              const text = utils.getText(span);
+              if (text && text.length > 50) return text;
+            }
+          }
+          return null;
+        }
+
+        const textElements = aboutList.querySelectorAll('span[aria-hidden="true"]');
+        for (const el of textElements) {
+          const text = utils.getText(el);
+          if (text && text.length > 20) return text;
+        }
+        return null;
+      };
+
+      const getProfileImage = () => {
+        const selectors = [
+          'img.pv-top-card-profile-picture__image',
+          'button img[class*="profile"]',
+          'img[src*="profile-displayphoto"]'
+        ];
+
+        for (const selector of selectors) {
+          const img = document.querySelector(selector);
+          if (img?.src && img.src.includes('http') && !img.src.includes('data:')) {
+            return img.src;
+          }
+        }
+        return null;
+      };
+
+      const getConnections = () => {
+        const texts = utils.getAllText([
+          '.pv-top-card--list-bullet li',
+          'span.t-bold span',
+          '.text-body-small'
+        ]);
+        return texts.find(t => t.toLowerCase().includes('connection')) || null;
+      };
+
+      // Section data extractors (with enhanced logging)
+      const getExperience = () => {
+        console.log('\n=== EXTRACTING EXPERIENCE ===');
+        const list = findSection('experience');
+        if (!list) {
+          console.log('❌ Experience list not found');
+          return [];
+        }
+
+        const items = list.querySelectorAll(':scope > li');
+        console.log(`✓ Found ${items.length} experience items`);
+        
+        return Array.from(items).map((item, i) => {
+          console.log(`\n  Processing experience item ${i + 1}:`);
+          const spans = utils.extractSpanTexts(item);
+          console.log(`    All spans:`, spans);
+          
+          const boldElements = item.querySelectorAll('.t-bold span[aria-hidden="true"]');
+          const boldTexts = Array.from(boldElements).map(e => utils.getText(e)).filter(Boolean);
+          console.log(`    Bold texts:`, boldTexts);
+          
+          const title = boldTexts[0] || spans[0] || null;
+          const company = boldTexts[1] || spans.find(s => s !== title && !s.match(/\d{4}/)) || null;
+          const duration = spans.find(s => s.match(/\d{4}|present|yr|mo/i)) || null;
+          const location = spans.find(s => s.includes(',') && !s.match(/\d{4}/)) || null;
+          const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
+
+          console.log(`    Extracted: title="${title}", company="${company}"`);
+          return { title, company, duration, location, description };
+        })
+        .filter(exp => exp.title && exp.title.length > 2)
+        .slice(0, 15);
+      };
+
+      const getEducation = () => {
+        console.log('\n=== EXTRACTING EDUCATION ===');
+        const list = findSection('education');
+        if (!list) {
+          console.log('❌ Education list not found');
+          return [];
+        }
+
+        const items = list.querySelectorAll(':scope > li');
+        console.log(`✓ Found ${items.length} education items`);
+        
+        return Array.from(items).map((item, i) => {
+          console.log(`\n  Processing education item ${i + 1}:`);
+          const spans = utils.extractSpanTexts(item);
+          console.log(`    All spans:`, spans);
+          
+          const boldElements = item.querySelectorAll('.t-bold span[aria-hidden="true"]');
+          const boldTexts = Array.from(boldElements).map(e => utils.getText(e)).filter(Boolean);
+          console.log(`    Bold texts:`, boldTexts);
+          
+          const school = boldTexts[0] || spans[0] || null;
+          const degree = spans.find(s => s.match(/Bachelor|Master|B\.?Tech|M\.?Tech|PhD|Degree|Diploma/i)) || boldTexts[1] || null;
+          const field = spans.find(s => s !== school && s !== degree && !s.match(/\d{4}/) && s.length > 3) || null;
+          const duration = spans.find(s => s.match(/\d{4}/)) || null;
+
+          console.log(`    Extracted: school="${school}", degree="${degree}"`);
+          return { school, degree, field, duration };
+        })
+        .filter(edu => edu.school && edu.school.length > 2)
+        .slice(0, 10);
+      };
+
+      const getSkills = () => {
+        console.log('\n=== EXTRACTING SKILLS ===');
+        const list = findSection('skills');
+        if (!list) {
+          console.log('❌ Skills list not found');
+          return [];
+        }
+
+        const skills = new Set();
+        const skillLinks = list.querySelectorAll('a[href*="/skills/"]');
+        console.log(`✓ Found ${skillLinks.length} skill links`);
+        
+        skillLinks.forEach(link => {
+          const span = link.querySelector('span[aria-hidden="true"]');
+          const skill = utils.getText(span || link);
+          if (skill && skill.length > 1 && skill.length < 100 && !skill.match(/\d+ endorsement/i)) {
+            skills.add(skill);
+          }
+        });
+
+        console.log(`✓ Extracted ${skills.size} unique skills`);
+        return Array.from(skills).slice(0, 50);
+      };
+
+      const getCertifications = () => {
+        console.log('\n=== EXTRACTING CERTIFICATIONS ===');
+        const list = findSection('licenses_and_certifications');
+        if (!list) {
+          console.log('❌ Certifications list not found');
+          return [];
+        }
+
+        const items = list.querySelectorAll(':scope > li');
+        console.log(`✓ Found ${items.length} certification items`);
+        
+        return Array.from(items).map(item => {
+          const spans = utils.extractSpanTexts(item);
+          const boldElements = item.querySelectorAll('.t-bold span[aria-hidden="true"]');
+          const boldTexts = Array.from(boldElements).map(e => utils.getText(e)).filter(Boolean);
+
+          const name = boldTexts[0] || spans[0] || null;
+          const issuer = boldTexts[1] || spans.find(s => s !== name && !s.match(/issued|credential/i)) || null;
+          const date = spans.find(s => s.toLowerCase().includes('issued') || s.match(/\w+\s+\d{4}/)) || null;
+          const credentialId = spans.find(s => s.toLowerCase().includes('credential')) || null;
+
+          return { name, issuer, date, credentialId };
+        })
+        .filter(cert => cert.name && cert.name.length > 2)
+        .slice(0, 15);
+      };
+
+      const getProjects = () => {
+        console.log('\n=== EXTRACTING PROJECTS ===');
+        const list = findSection('projects');
+        if (!list) {
+          console.log('❌ Projects list not found');
+          return [];
+        }
+
+        const items = list.querySelectorAll(':scope > li');
+        console.log(`✓ Found ${items.length} project items`);
+        
+        return Array.from(items).map(item => {
+          const spans = utils.extractSpanTexts(item);
+          const boldElements = item.querySelectorAll('.t-bold span[aria-hidden="true"]');
+          const boldTexts = Array.from(boldElements).map(e => utils.getText(e)).filter(Boolean);
+
+          const name = boldTexts[0] || spans[0] || null;
+          const date = spans.find(s => s.match(/\d{4}/)) || null;
+          const association = spans.find(s => s.toLowerCase().includes('associated')) || null;
+          const description = utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'));
+
+          return { name, date, association, description };
+        })
+        .filter(proj => proj.name && proj.name.length > 2)
+        .slice(0, 10);
+      };
+
+      const getLanguages = () => {
+        console.log('\n=== EXTRACTING LANGUAGES ===');
+        const list = findSection('languages');
+        if (!list) {
+          console.log('❌ Languages list not found');
+          return [];
+        }
+
+        const languages = [];
+        const items = list.querySelectorAll(':scope > li');
+        console.log(`✓ Found ${items.length} language items`);
+        
+        items.forEach(item => {
+          const boldElement = item.querySelector('.t-bold span[aria-hidden="true"]');
+          const lang = utils.getText(boldElement);
+          
+          if (lang && 
+              lang.length > 1 && 
+              lang.length < 30 && 
+              !lang.includes('follower') &&
+              !lang.includes('connection') &&
+              !lang.match(/\d{3,}/)) {
+            languages.push(lang);
+          }
+        });
+
+        return languages.slice(0, 10);
+      };
+
+      // Return complete profile data
+      return {
+        name: getName(),
+        headline: getHeadline(),
+        location: getLocation(),
+        about: getAbout(),
+        profileImage: getProfileImage(),
+        connections: getConnections(),
+        experience: getExperience(),
+        education: getEducation(),
+        skills: getSkills(),
+        certifications: getCertifications(),
+        projects: getProjects(),
+        languages: getLanguages()
+      };
+    });
+
+    const timeTaken = ((Date.now() - startTime) / 1000).toFixed(2);
+    
+    console.log('\n✅ SCRAPING COMPLETED!');
+    console.log('═══════════════════════════════════════');
+    console.log(`⏱️  Time taken: ${timeTaken}s`);
+    console.log(`📛 Name: ${profileData.name || '❌ NOT FOUND'}`);
+    console.log(`💼 Headline: ${profileData.headline || '❌ NOT FOUND'}`);
+    console.log(`📍 Location: ${profileData.location || '❌ NOT FOUND'}`);
+    console.log(`🖼️  Profile Image: ${profileData.profileImage ? '✅ Found' : '❌ NOT FOUND'}`);
+    console.log(`📝 About: ${profileData.about ? '✅ Found (' + profileData.about.length + ' chars)' : '❌ NOT FOUND'}`);
+    console.log(`🔗 Connections: ${profileData.connections || '❌ NOT FOUND'}`);
+    console.log(`💼 Experience: ${profileData.experience.length} entries`);
+    console.log(`🎓 Education: ${profileData.education.length} entries`);
+    console.log(`⚡ Skills: ${profileData.skills.length} skills`);
+    console.log(`🏆 Certifications: ${profileData.certifications.length} certifications`);
+    console.log(`🚀 Projects: ${profileData.projects.length} projects`);
+    console.log(`🌐 Languages: ${profileData.languages.length} languages`);
+    console.log('═══════════════════════════════════════\n');
+
+    return {
+      success: true,
+      data: profileData,
+      scrapedAt: new Date().toISOString(),
+      profileUrl: profileUrl,
+      timeTaken: `${timeTaken}s`
+    };
+
+  } catch (error) {
+    console.error('❌ Scraping error:', error.message);
+    return {
+      success: false,
+      error: error.message,
+      profileUrl: profileUrl
+    };
+  }
+}
 
   async optimizedScroll() {
     console.log('📜 Optimized scrolling...');
