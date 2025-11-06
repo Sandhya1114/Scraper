@@ -110,41 +110,84 @@ class LinkedInScraper {
   }
 
 async enhancedScroll() {
-  console.log('📜 Enhanced scrolling with section expansion...');
+  console.log('📜 Enhanced scrolling with aggressive section expansion...');
   
-  // Scroll down slowly in more steps
-  for (let i = 0; i < 8; i++) {
+  // First, scroll to load all sections
+  for (let i = 0; i < 6; i++) {
     await this.page.evaluate((i) => {
       window.scrollTo({
-        top: (i + 1) * (document.body.scrollHeight / 8),
+        top: (i + 1) * (document.body.scrollHeight / 6),
         behavior: 'smooth'
       });
     }, i);
-    await this.randomDelay(1500, 2000);
-    
-    // Try to click "Show all" buttons at each scroll position
-    try {
-      const buttons = await this.page.$$('button:has-text("Show all"), button:has-text("show more")').catch(() => []);
-      for (const button of buttons.slice(0, 2)) {
-        try {
-          await button.click({ timeout: 1000 });
-          await this.randomDelay(800, 1200);
-        } catch (e) {
-          // Button not clickable, continue
-        }
-      }
-    } catch (e) {
-      // Ignore errors
-    }
+    await this.randomDelay(1200, 1800);
   }
 
-  // Final scroll to bottom
+  // Wait for sections to load
+  await this.randomDelay(2000, 3000);
+
+  // Now aggressively click ALL "Show all" and expansion buttons
+  console.log('🔘 Clicking all expansion buttons...');
+  
+  try {
+    // Multiple attempts to find and click all buttons
+    for (let attempt = 0; attempt < 3; attempt++) {
+      console.log(`  Attempt ${attempt + 1} to expand sections...`);
+      
+      // Find all possible "Show all" button selectors
+      const buttonSelectors = [
+        'button[aria-label*="Show all"]',
+        'button:has-text("Show all")',
+        'button:has-text("show all")',
+        'button.artdeco-button:has-text("Show")',
+        'button[id^="navigation-index-see-all"]',
+        'a[href*="#show-all"]',
+        'button.pvs-navigation__item',
+        'button span:has-text("Show all")',
+        'div.pvs-list__footer-wrapper button'
+      ];
+
+      for (const selector of buttonSelectors) {
+        try {
+          const buttons = await this.page.$$(selector);
+          console.log(`  Found ${buttons.length} buttons for selector: ${selector}`);
+          
+          for (const button of buttons) {
+            try {
+              const isVisible = await button.isVisible().catch(() => false);
+              if (isVisible) {
+                await button.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
+                await this.randomDelay(300, 500);
+                await button.click({ timeout: 2000, force: true });
+                console.log(`  ✓ Clicked expansion button`);
+                await this.randomDelay(1000, 1500);
+              }
+            } catch (e) {
+              // Continue to next button
+            }
+          }
+        } catch (e) {
+          // Continue to next selector
+        }
+      }
+      
+      // Scroll again after clicking buttons
+      await this.page.evaluate(() => {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      });
+      await this.randomDelay(2000, 2500);
+    }
+  } catch (e) {
+    console.log('  Some buttons could not be clicked, continuing...');
+  }
+
+  // Final scroll to ensure everything is loaded
   await this.page.evaluate(() => {
     window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
   });
-  await this.randomDelay(2000, 3000);
+  await this.randomDelay(3000, 4000);
 
-  console.log('✅ Enhanced scrolling completed');
+  console.log('✅ Enhanced scrolling and expansion completed');
 }
  async scrapeProfile(profileUrl) {
   try {
@@ -497,19 +540,95 @@ async enhancedScroll() {
         }
 
         const skills = new Set();
-        const skillLinks = list.querySelectorAll('a[href*="/skills/"]');
-        console.log(`✓ Found ${skillLinks.length} skill links`);
         
-        skillLinks.forEach(link => {
-          const span = link.querySelector('span[aria-hidden="true"]');
-          const skill = utils.getText(span || link);
-          if (skill && skill.length > 1 && skill.length < 100 && !skill.match(/\d+ endorsement/i)) {
-            skills.add(skill);
+        // Method 1: Try skill links (most common)
+        console.log('  Method 1: Extracting from skill links...');
+        const skillLinks = list.querySelectorAll('a[href*="/skills/"]');
+        console.log(`    Found ${skillLinks.length} skill links`);
+        
+        skillLinks.forEach((link, i) => {
+          // Get ALL text content from the link, then clean it
+          const fullText = utils.getText(link);
+          if (fullText) {
+            // Split by newlines and take first meaningful line
+            const lines = fullText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            const skillName = lines[0]; // First line is usually the skill name
+            
+            console.log(`    Skill ${i + 1}: "${skillName}"`);
+            
+            if (skillName && 
+                skillName.length > 1 && 
+                skillName.length < 100 && 
+                !skillName.match(/\d+\s*endorsement/i) &&
+                !skillName.match(/\d+\s*experience/i) &&
+                !skillName.toLowerCase().includes('show all') &&
+                !skillName.match(/^\d+$/)) {
+              skills.add(skillName);
+            }
           }
         });
 
-        console.log(`✓ Extracted ${skills.size} unique skills`);
-        return Array.from(skills).slice(0, 50);
+        // Method 2: Extract from list items directly
+        if (skills.size === 0) {
+          console.log('  Method 2: Extracting from list items...');
+          const listItems = list.querySelectorAll(':scope > li');
+          console.log(`    Found ${listItems.length} list items`);
+          
+          listItems.forEach((item, i) => {
+            // Try to find the skill name in various ways
+            const skillLink = item.querySelector('a[href*="/skills/"]');
+            if (skillLink) {
+              const skillName = utils.getText(skillLink)?.split('\n')[0]?.trim();
+              console.log(`    Item ${i + 1}: "${skillName}"`);
+              
+              if (skillName && 
+                  skillName.length > 1 && 
+                  skillName.length < 100 && 
+                  !skillName.match(/\d+\s*endorsement/i) &&
+                  !skillName.match(/\d+\s*experience/i)) {
+                skills.add(skillName);
+              }
+            } else {
+              // Fallback: get first span text
+              const firstSpan = item.querySelector('span[aria-hidden="true"]');
+              if (firstSpan) {
+                const text = utils.getText(firstSpan)?.split('\n')[0]?.trim();
+                console.log(`    Item ${i + 1}: "${text}"`);
+                
+                if (text && 
+                    text.length > 1 && 
+                    text.length < 100 && 
+                    !text.match(/\d+\s*endorsement/i) &&
+                    !text.match(/\d+\s*experience/i)) {
+                  skills.add(text);
+                }
+              }
+            }
+          });
+        }
+
+        // Method 3: Brute force - find all divs with skill-like content
+        if (skills.size === 0) {
+          console.log('  Method 3: Brute force extraction...');
+          const allDivs = list.querySelectorAll('div');
+          allDivs.forEach(div => {
+            const text = utils.getText(div)?.split('\n')[0]?.trim();
+            if (text && 
+                text.length > 2 && 
+                text.length < 50 && 
+                !text.match(/\d+\s*endorsement/i) &&
+                !text.match(/\d+\s*experience/i) &&
+                !text.toLowerCase().includes('show') &&
+                !text.match(/^\d+$/)) {
+              skills.add(text);
+            }
+          });
+          console.log(`    Found ${skills.size} potential skills`);
+        }
+
+        const finalSkills = Array.from(skills).slice(0, 100);
+        console.log(`✓ Extracted ${finalSkills.length} unique skills`);
+        return finalSkills;
       };
 
       const getCertifications = () => {
