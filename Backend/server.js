@@ -1,5 +1,5 @@
-// ULTRA-FAST LinkedIn Profile Scraper - Optimized for 1-2 second scraping
-// Key optimizations: Minimal delays, parallel processing, smart scrolling
+// ULTRA-FAST LinkedIn Profile Scraper - Optimized for SUB-1 SECOND scraping
+// Key optimizations: Block only heavy resources, instant extraction, parallel processing
 
 const express = require('express');
 const { chromium } = require('playwright-extra');
@@ -37,8 +37,6 @@ class LinkedInScraper {
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
         '--disable-dev-shm-usage',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
       ]
     });
 
@@ -59,6 +57,21 @@ class LinkedInScraper {
     });
 
     this.page = await this.context.newPage();
+    
+    // Block only images and fonts (keep CSS for element visibility)
+    await this.page.route('**/*', (route) => {
+      const url = route.request().url();
+      const resourceType = route.request().resourceType();
+      
+      // Block heavy resources but keep essential ones
+      if (resourceType === 'image' && !url.includes('profile-displayphoto')) {
+        route.abort();
+      } else if (['font', 'media'].includes(resourceType)) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
   }
 
   async login(email, password) {
@@ -76,7 +89,6 @@ class LinkedInScraper {
       await this.page.click('button[type="submit"]');
       
       await this.page.waitForURL('**/feed/**', { timeout: 25000 }).catch(() => {});
-      await this.randomDelay(500, 800);
 
       const currentUrl = this.page.url();
       if (currentUrl.includes('/feed') || currentUrl.includes('/mynetwork')) {
@@ -103,45 +115,32 @@ class LinkedInScraper {
     }
   }
 
-  async fastScroll() {
-    console.log('⚡ Fast scrolling...');
-    
-    // Single aggressive scroll to bottom
+  async instantScroll() {
+    // Quick scroll strategy - scroll multiple times instantly
     await this.page.evaluate(() => {
-      window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' });
+      // Scroll to multiple positions instantly
+      const positions = [
+        document.body.scrollHeight * 0.3,
+        document.body.scrollHeight * 0.6,
+        document.body.scrollHeight * 0.9,
+        document.body.scrollHeight
+      ];
+      
+      positions.forEach(pos => {
+        window.scrollTo(0, pos);
+      });
     });
     
-    // Wait just enough for lazy-loaded content
-    await this.randomDelay(800, 1200);
+    // Wait just 400ms for content to load
+    await new Promise(resolve => setTimeout(resolve, 400));
     
-    // Try to expand key sections in parallel (non-blocking)
-    this.expandSections().catch(() => {}); // Fire and forget
-    
-    // One more scroll to catch anything that loaded
-    await this.page.evaluate(() => {
-      window.scrollTo({ top: document.body.scrollHeight * 0.7, behavior: 'auto' });
-    });
-    
-    await this.randomDelay(500, 700);
-    console.log('✅ Fast scroll completed');
-  }
-
-  async expandSections() {
-    try {
-      const buttons = await this.page.$$('button[aria-label*="Show all"], button:has-text("Show all")');
-      
-      // Click up to 3 buttons in parallel
-      const clickPromises = buttons.slice(0, 3).map(button => 
-        button.click({ timeout: 1000, force: true }).catch(() => {})
-      );
-      
-      await Promise.race([
-        Promise.all(clickPromises),
-        new Promise(resolve => setTimeout(resolve, 2000)) // Max 2s wait
-      ]);
-    } catch (e) {
-      // Silent fail - don't block scraping
-    }
+    // Expand sections in parallel
+    await this.page.$$eval(
+      'button[aria-label*="Show all"], button:has-text("Show all")',
+      buttons => buttons.slice(0, 5).forEach(btn => {
+        try { btn.click(); } catch(e) {}
+      })
+    ).catch(() => {});
   }
 
   async scrapeProfile(profileUrl) {
@@ -150,283 +149,335 @@ class LinkedInScraper {
         throw new Error('Not logged in');
       }
 
-      console.log(`\n🔍 Scraping profile: ${profileUrl}`);
+      console.log(`\n🔍 Scraping: ${profileUrl}`);
       const startTime = Date.now();
       
-      // Fast navigation
+      // Navigate with minimal waiting
       await this.page.goto(profileUrl, { 
-        waitUntil: 'domcontentloaded', // Don't wait for everything
-        timeout: 15000 
+        waitUntil: 'domcontentloaded',
+        timeout: 10000 
       });
 
-      // Minimal wait for critical elements
-      await this.page.waitForSelector('.pv-text-details__left-panel, .ph5', { 
-        timeout: 5000 
-      }).catch(() => {});
+      // Wait for critical elements only (300ms max)
+      await Promise.race([
+        this.page.waitForSelector('.pv-text-details__left-panel, h1', { timeout: 5000 }),
+        new Promise(resolve => setTimeout(resolve, 300))
+      ]);
       
-      // Fast scroll strategy
-      await this.fastScroll();
-      
-      // Extract data immediately (don't wait longer)
-      const profileData = await this.page.evaluate(() => {
-        const utils = {
-          getText: (element) => {
-            if (!element) return null;
-            const text = (element.innerText || element.textContent || '').trim();
-            return text.length > 0 ? text : null;
-          },
+      // Scroll and extract in parallel
+      const [, profileData] = await Promise.all([
+        this.instantScroll(),
+        // Small delay before extraction to let DOM settle
+        new Promise(resolve => setTimeout(resolve, 200)).then(() => 
+          this.page.evaluate(() => {
+            const utils = {
+              getText: (element) => {
+                if (!element) return null;
+                const text = (element.innerText || element.textContent || '').trim();
+                return text.length > 0 ? text : null;
+              },
 
-          trySelectors: (selectors) => {
-            for (const selector of selectors) {
-              const el = document.querySelector(selector);
-              if (el) {
-                const text = utils.getText(el);
-                if (text) return text;
+              trySelectors: (selectors) => {
+                for (const selector of selectors) {
+                  const el = document.querySelector(selector);
+                  if (el) {
+                    const text = utils.getText(el);
+                    if (text) return text;
+                  }
+                }
+                return null;
+              },
+
+              getAllText: (selectors) => {
+                const texts = new Set();
+                for (const selector of selectors) {
+                  const elements = document.querySelectorAll(selector);
+                  elements.forEach(el => {
+                    const text = utils.getText(el);
+                    if (text) texts.add(text);
+                  });
+                }
+                return Array.from(texts);
+              },
+
+              extractSpanTexts: (container) => {
+                if (!container) return [];
+                const spans = container.querySelectorAll('span[aria-hidden="true"]');
+                return Array.from(spans)
+                  .map(s => utils.getText(s))
+                  .filter(t => t && t.length > 0);
               }
-            }
-            return null;
-          },
+            };
 
-          getAllText: (selectors) => {
-            const texts = new Set();
-            for (const selector of selectors) {
-              const elements = document.querySelectorAll(selector);
-              elements.forEach(el => {
-                const text = utils.getText(el);
-                if (text) texts.add(text);
+            // Section finder with caching
+            const sectionCache = {};
+            const findSection = (sectionName) => {
+              if (sectionCache[sectionName] !== undefined) {
+                return sectionCache[sectionName];
+              }
+
+              // Try ID first
+              let section = document.getElementById(sectionName);
+              if (section?.tagName === 'SECTION') {
+                const list = section.querySelector('ul');
+                if (list) {
+                  sectionCache[sectionName] = list;
+                  return list;
+                }
+              }
+
+              // Try div with ID
+              const idDiv = document.getElementById(sectionName);
+              if (idDiv) {
+                const parentSection = idDiv.closest('section');
+                if (parentSection) {
+                  const list = parentSection.querySelector('ul');
+                  if (list) {
+                    sectionCache[sectionName] = list;
+                    return list;
+                  }
+                }
+              }
+
+              // Search by heading
+              const sections = Array.from(document.querySelectorAll('section')).slice(0, 20);
+              const searchTerm = sectionName.toLowerCase().replace(/_/g, ' ');
+              
+              for (const sec of sections) {
+                const h2 = sec.querySelector('h2, div[id*="ember"] h2');
+                const h2Text = utils.getText(h2)?.toLowerCase() || '';
+                
+                if (h2Text.includes(searchTerm) || h2Text === searchTerm) {
+                  const list = sec.querySelector('ul');
+                  if (list) {
+                    sectionCache[sectionName] = list;
+                    return list;
+                  }
+                }
+              }
+
+              sectionCache[sectionName] = null;
+              return null;
+            };
+
+            // Extract all data
+            const name = utils.trySelectors([
+              'h1.text-heading-xlarge',
+              'h1.inline.t-24.v-align-middle.break-words',
+              'h1'
+            ]);
+            
+            const headline = (() => {
+              const h = utils.trySelectors([
+                '.text-body-medium.break-words',
+                'div.text-body-medium',
+                '.pv-text-details__left-panel .text-body-medium'
+              ]);
+              return (h && h.length > 10 && !h.toLowerCase().includes('connection')) ? h : null;
+            })();
+            
+            const location = (() => {
+              const texts = utils.getAllText([
+                '.text-body-small.inline.t-black--light.break-words',
+                'span.text-body-small.inline.t-black--light',
+                '.pv-text-details__left-panel .text-body-small'
+              ]);
+              return texts.find(t => t.includes(',') || /\b(India|USA|UK|Canada|City|State)\b/i.test(t)) || texts[0] || null;
+            })();
+            
+            const about = (() => {
+              const aboutList = findSection('about');
+              if (!aboutList) return null;
+              
+              const spans = aboutList.querySelectorAll('span[aria-hidden="true"]');
+              for (const span of spans) {
+                const text = utils.getText(span);
+                if (text && text.length > 50) return text;
+              }
+              
+              // Try visible spans
+              const allSpans = aboutList.querySelectorAll('span.visually-hidden');
+              for (const span of allSpans) {
+                const text = utils.getText(span);
+                if (text && text.length > 50) return text;
+              }
+              
+              return null;
+            })();
+            
+            const profileImage = (() => {
+              const img = document.querySelector(
+                'img.pv-top-card-profile-picture__image, ' +
+                'img[src*="profile-displayphoto"], ' +
+                'button img[src*="shrink"]'
+              );
+              return (img?.src && img.src.startsWith('http') && !img.src.includes('data:')) ? img.src : null;
+            })();
+            
+            const connections = (() => {
+              const texts = utils.getAllText([
+                '.pv-top-card--list-bullet li',
+                'span.t-bold span',
+                '.pv-top-card--list li span'
+              ]);
+              return texts.find(t => /connection|follower/i.test(t)) || null;
+            })();
+
+            // Experience
+            const experience = (() => {
+              const list = findSection('experience');
+              if (!list) return [];
+
+              const items = list.querySelectorAll(':scope > li');
+              return Array.from(items).slice(0, 10).map(item => {
+                const spans = utils.extractSpanTexts(item);
+                const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
+                  .map(e => utils.getText(e)).filter(Boolean);
+                
+                return {
+                  title: boldTexts[0] || spans[0] || null,
+                  company: boldTexts[1] || spans.find(s => s !== boldTexts[0] && !/\d{4}/.test(s)) || null,
+                  duration: spans.find(s => /\d{4}|present|yr|mo/i.test(s)) || null,
+                  location: spans.find(s => s.includes(',') && !/\d{4}/.test(s)) || null,
+                  description: utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'))
+                };
+              }).filter(exp => exp.title && exp.title.length > 2);
+            })();
+
+            // Education
+            const education = (() => {
+              const list = findSection('education');
+              if (!list) return [];
+
+              const items = list.querySelectorAll(':scope > li');
+              return Array.from(items).slice(0, 8).map(item => {
+                const spans = utils.extractSpanTexts(item);
+                const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
+                  .map(e => utils.getText(e)).filter(Boolean);
+                
+                return {
+                  school: boldTexts[0] || spans[0] || null,
+                  degree: spans.find(s => /Bachelor|Master|B\.?Tech|M\.?Tech|PhD|Degree|Diploma/i.test(s)) || boldTexts[1] || null,
+                  field: spans.find(s => s !== boldTexts[0] && !/\d{4}/.test(s) && s.length > 3) || null,
+                  duration: spans.find(s => /\d{4}/.test(s)) || null
+                };
+              }).filter(edu => edu.school && edu.school.length > 2);
+            })();
+
+            // Skills
+            const skills = (() => {
+              const list = findSection('skills');
+              if (!list) return [];
+
+              const skillSet = new Set();
+              const skillLinks = list.querySelectorAll('a[href*="/skills/"], div[data-field="skill_card_skill_topic"]');
+              
+              skillLinks.forEach(link => {
+                if (skillSet.size >= 40) return;
+                const fullText = utils.getText(link);
+                if (fullText) {
+                  const skillName = fullText.split('\n')[0].trim();
+                  if (skillName && 
+                      skillName.length > 1 && 
+                      skillName.length < 100 && 
+                      !/\d+\s*endorsement/i.test(skillName)) {
+                    skillSet.add(skillName);
+                  }
+                }
               });
-            }
-            return Array.from(texts);
-          },
 
-          extractSpanTexts: (container) => {
-            if (!container) return [];
-            const spans = container.querySelectorAll('span[aria-hidden="true"]');
-            return Array.from(spans)
-              .map(s => utils.getText(s))
-              .filter(t => t && t.length > 0);
-          }
-        };
+              return Array.from(skillSet);
+            })();
 
-        // Fast section finder
-        const findSection = (sectionName) => {
-          // Try ID first (fastest)
-          let section = document.getElementById(sectionName);
-          if (section && section.tagName === 'SECTION') {
-            const list = section.querySelector('ul');
-            if (list) return list;
-          }
+            // Certifications
+            const certifications = (() => {
+              const list = findSection('licenses_and_certifications');
+              if (!list) return [];
 
-          // Try div with ID
-          const idDiv = document.getElementById(sectionName);
-          if (idDiv) {
-            const parentSection = idDiv.closest('section');
-            if (parentSection) {
-              const list = parentSection.querySelector('ul');
-              if (list) return list;
-            }
-          }
+              const items = list.querySelectorAll(':scope > li');
+              return Array.from(items).slice(0, 8).map(item => {
+                const spans = utils.extractSpanTexts(item);
+                const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
+                  .map(e => utils.getText(e)).filter(Boolean);
 
-          // Quick heading search (only check first 20 sections)
-          const sections = Array.from(document.querySelectorAll('section')).slice(0, 20);
-          const searchTerm = sectionName.toLowerCase().replace('_', ' ');
-          
-          for (const sec of sections) {
-            const h2 = sec.querySelector('h2');
-            const h2Text = utils.getText(h2)?.toLowerCase() || '';
-            
-            if (h2Text.includes(searchTerm)) {
-              const list = sec.querySelector('ul');
-              if (list) return list;
-            }
-          }
+                return {
+                  name: boldTexts[0] || spans[0] || null,
+                  issuer: boldTexts[1] || spans.find(s => s !== boldTexts[0]) || null,
+                  date: spans.find(s => /\w+\s+\d{4}/.test(s)) || null
+                };
+              }).filter(cert => cert.name);
+            })();
 
-          return null;
-        };
+            // Projects
+            const projects = (() => {
+              const list = findSection('projects');
+              if (!list) return [];
 
-        // Basic info (fastest selectors)
-        const getName = () => utils.trySelectors(['h1.text-heading-xlarge', 'h1']);
-        
-        const getHeadline = () => {
-          const headline = utils.trySelectors(['.text-body-medium.break-words', 'div.text-body-medium']);
-          return (headline && headline.length > 10 && !headline.includes('connection')) ? headline : null;
-        };
-        
-        const getLocation = () => {
-          const texts = utils.getAllText(['.text-body-small.inline.t-black--light.break-words', 'span.text-body-small.inline']);
-          return texts.find(t => t.includes(',') || t.match(/India|USA|UK|Canada/i)) || texts[0] || null;
-        };
-        
-        const getAbout = () => {
-          const aboutList = findSection('about');
-          if (!aboutList) return null;
-          
-          const textElements = aboutList.querySelectorAll('span[aria-hidden="true"]');
-          for (const el of textElements) {
-            const text = utils.getText(el);
-            if (text && text.length > 20) return text;
-          }
-          return null;
-        };
-        
-        const getProfileImage = () => {
-          const img = document.querySelector('img.pv-top-card-profile-picture__image, img[src*="profile-displayphoto"]');
-          return (img?.src && img.src.includes('http') && !img.src.includes('data:')) ? img.src : null;
-        };
-        
-        const getConnections = () => {
-          const texts = utils.getAllText(['.pv-top-card--list-bullet li', 'span.t-bold span']);
-          return texts.find(t => t.toLowerCase().includes('connection')) || null;
-        };
+              const items = list.querySelectorAll(':scope > li');
+              return Array.from(items).slice(0, 8).map(item => {
+                const spans = utils.extractSpanTexts(item);
+                const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
+                  .map(e => utils.getText(e)).filter(Boolean);
 
-        // Experience (optimized)
-        const getExperience = () => {
-          const list = findSection('experience');
-          if (!list) return [];
+                return {
+                  name: boldTexts[0] || spans[0] || null,
+                  date: spans.find(s => /\d{4}/.test(s)) || null
+                };
+              }).filter(proj => proj.name);
+            })();
 
-          const items = list.querySelectorAll(':scope > li');
-          return Array.from(items).slice(0, 15).map(item => {
-            const spans = utils.extractSpanTexts(item);
-            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
-              .map(e => utils.getText(e)).filter(Boolean);
-            
-            return {
-              title: boldTexts[0] || spans[0] || null,
-              company: boldTexts[1] || spans.find(s => s !== boldTexts[0] && !s.match(/\d{4}/)) || null,
-              duration: spans.find(s => s.match(/\d{4}|present|yr|mo/i)) || null,
-              location: spans.find(s => s.includes(',') && !s.match(/\d{4}/)) || null,
-              description: utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'))
-            };
-          }).filter(exp => exp.title && exp.title.length > 2);
-        };
+            // Languages
+            const languages = (() => {
+              const list = findSection('languages');
+              if (!list) return [];
 
-        // Education (optimized)
-        const getEducation = () => {
-          const list = findSection('education');
-          if (!list) return [];
+              const langs = [];
+              const items = list.querySelectorAll(':scope > li');
+              
+              items.forEach(item => {
+                if (langs.length >= 8) return;
+                const boldElement = item.querySelector('.t-bold span[aria-hidden="true"]');
+                const lang = utils.getText(boldElement);
+                if (lang && lang.length > 1 && lang.length < 30) {
+                  langs.push(lang);
+                }
+              });
 
-          const items = list.querySelectorAll(':scope > li');
-          return Array.from(items).slice(0, 10).map(item => {
-            const spans = utils.extractSpanTexts(item);
-            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
-              .map(e => utils.getText(e)).filter(Boolean);
-            
-            return {
-              school: boldTexts[0] || spans[0] || null,
-              degree: spans.find(s => s.match(/Bachelor|Master|B\.?Tech|M\.?Tech|PhD|Degree|Diploma/i)) || boldTexts[1] || null,
-              field: spans.find(s => s !== boldTexts[0] && !s.match(/\d{4}/) && s.length > 3) || null,
-              duration: spans.find(s => s.match(/\d{4}/)) || null
-            };
-          }).filter(edu => edu.school && edu.school.length > 2);
-        };
-
-        // Skills (ultra-fast extraction)
-        const getSkills = () => {
-          const list = findSection('skills');
-          if (!list) return [];
-
-          const skills = new Set();
-          const skillLinks = list.querySelectorAll('a[href*="/skills/"]');
-          
-          skillLinks.forEach(link => {
-            const fullText = utils.getText(link);
-            if (fullText) {
-              const skillName = fullText.split('\n')[0].trim();
-              if (skillName && 
-                  skillName.length > 1 && 
-                  skillName.length < 100 && 
-                  !skillName.match(/\d+\s*endorsement/i)) {
-                skills.add(skillName);
-              }
-            }
-          });
-
-          return Array.from(skills).slice(0, 50);
-        };
-
-        // Certifications (fast)
-        const getCertifications = () => {
-          const list = findSection('licenses_and_certifications');
-          if (!list) return [];
-
-          const items = list.querySelectorAll(':scope > li');
-          return Array.from(items).slice(0, 10).map(item => {
-            const spans = utils.extractSpanTexts(item);
-            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
-              .map(e => utils.getText(e)).filter(Boolean);
+              return langs;
+            })();
 
             return {
-              name: boldTexts[0] || spans[0] || null,
-              issuer: boldTexts[1] || spans.find(s => s !== boldTexts[0]) || null,
-              date: spans.find(s => s.match(/\w+\s+\d{4}/)) || null
+              name,
+              headline,
+              location,
+              about,
+              profileImage,
+              connections,
+              experience,
+              education,
+              skills,
+              certifications,
+              projects,
+              languages
             };
-          }).filter(cert => cert.name);
-        };
-
-        // Projects (fast)
-        const getProjects = () => {
-          const list = findSection('projects');
-          if (!list) return [];
-
-          const items = list.querySelectorAll(':scope > li');
-          return Array.from(items).slice(0, 10).map(item => {
-            const spans = utils.extractSpanTexts(item);
-            const boldTexts = Array.from(item.querySelectorAll('.t-bold span[aria-hidden="true"]'))
-              .map(e => utils.getText(e)).filter(Boolean);
-
-            return {
-              name: boldTexts[0] || spans[0] || null,
-              date: spans.find(s => s.match(/\d{4}/)) || null
-            };
-          }).filter(proj => proj.name);
-        };
-
-        // Languages (fast)
-        const getLanguages = () => {
-          const list = findSection('languages');
-          if (!list) return [];
-
-          const languages = [];
-          const items = list.querySelectorAll(':scope > li');
-          
-          items.forEach(item => {
-            const boldElement = item.querySelector('.t-bold span[aria-hidden="true"]');
-            const lang = utils.getText(boldElement);
-            if (lang && lang.length > 1 && lang.length < 30) {
-              languages.push(lang);
-            }
-          });
-
-          return languages.slice(0, 10);
-        };
-
-        return {
-          name: getName(),
-          headline: getHeadline(),
-          location: getLocation(),
-          about: getAbout(),
-          profileImage: getProfileImage(),
-          connections: getConnections(),
-          experience: getExperience(),
-          education: getEducation(),
-          skills: getSkills(),
-          certifications: getCertifications(),
-          projects: getProjects(),
-          languages: getLanguages()
-        };
-      });
+          })
+        )
+      ]);
 
       const timeTaken = ((Date.now() - startTime) / 1000).toFixed(2);
       
-      console.log('\n⚡ ULTRA-FAST SCRAPING COMPLETED!');
+      console.log('\n⚡ SCRAPING COMPLETED!');
       console.log('═══════════════════════════════════════');
       console.log(`⏱️  Time: ${timeTaken}s`);
-      console.log(`📛 Name: ${profileData.name || '❌'}`);
+      console.log(`📛 Name: ${profileData.name || '❌ NOT FOUND'}`);
       console.log(`💼 Headline: ${profileData.headline ? '✅' : '❌'}`);
+      console.log(`📍 Location: ${profileData.location || '❌'}`);
       console.log(`💼 Experience: ${profileData.experience.length} entries`);
       console.log(`🎓 Education: ${profileData.education.length} entries`);
       console.log(`⚡ Skills: ${profileData.skills.length} skills`);
       console.log(`🏆 Certifications: ${profileData.certifications.length}`);
+      console.log(`📂 Projects: ${profileData.projects.length}`);
+      console.log(`🗣️  Languages: ${profileData.languages.length}`);
       console.log('═══════════════════════════════════════\n');
 
       return {
@@ -445,11 +496,6 @@ class LinkedInScraper {
         profileUrl: profileUrl
       };
     }
-  }
-
-  async randomDelay(min, max) {
-    const delay = Math.floor(Math.random() * (max - min + 1)) + min;
-    await new Promise(resolve => setTimeout(resolve, delay));
   }
 
   async close() {
@@ -483,9 +529,9 @@ const startAutoScraper = async () => {
     return;
   }
 
-  console.log('\n🚀 ULTRA-FAST MODE ENABLED');
+  console.log('\n🚀 SUB-1-SECOND MODE ENABLED');
   console.log('📧 Email:', email);
-  console.log('⚡ Expected scraping time: 1-2 seconds per profile\n');
+  console.log('⚡ Expected scraping time: 0.8-1.5 seconds per profile\n');
 
   try {
     loginStatus.loginInProgress = true;
@@ -498,7 +544,7 @@ const startAutoScraper = async () => {
       loginStatus.isLoggedIn = true;
       loginStatus.loginInProgress = false;
       loginStatus.error = null;
-      console.log('\n✅ READY FOR ULTRA-FAST SCRAPING!');
+      console.log('\n✅ READY FOR FAST SCRAPING!');
       console.log('📌 Open UI: http://localhost:3001\n');
     } else {
       loginStatus.isLoggedIn = false;
@@ -572,7 +618,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'ultra-fast-linkedin-scraper',
-    version: '7.0.0-turbo',
+    version: '8.1.0-fixed',
     loginStatus: loginStatus
   });
 });
