@@ -11,6 +11,7 @@ const App = () => {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [statusCheckCount, setStatusCheckCount] = useState(0);
+  const [elapsedTime, setElapsedTime] = useState(0);
 
   const API_URL = 'http://localhost:3001';
 
@@ -78,6 +79,13 @@ const App = () => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setElapsedTime(0);
+
+    // Start real-time timer
+    const startTime = Date.now();
+    const timerInterval = setInterval(() => {
+      setElapsedTime(Date.now() - startTime);
+    }, 10); // Update every 10ms for smooth animation
 
     try {
       const response = await fetch(`${API_URL}/api/scrape-profile`, {
@@ -87,6 +95,7 @@ const App = () => {
       });
 
       const data = await response.json();
+      clearInterval(timerInterval);
 
       if (data.success) {
         setResult(data);
@@ -94,6 +103,7 @@ const App = () => {
         setError(data.error || 'Scraping failed');
       }
     } catch (err) {
+      clearInterval(timerInterval);
       setError('Failed to scrape. Check if backend is running.');
     } finally {
       setLoading(false);
@@ -196,13 +206,13 @@ const App = () => {
             <User className="header-icon" />
             <h1>LinkedIn Profile Scraper</h1>
           </div>
-          <p className="header-subtitle">Extract comprehensive profile data from any LinkedIn profile</p>
+          <p className="header-subtitle">⚡ Ultra-Fast Extraction - Target: &lt;1 Second</p>
         </div>
 
         {/* Status Badge */}
         <div className="status-banner">
           <CheckCircle className="status-icon" />
-          <span>Logged In & Ready to Scrape</span>
+          <span>Logged In & Ready for Sub-1s Scraping</span>
         </div>
 
         {/* Scrape Form */}
@@ -241,7 +251,7 @@ const App = () => {
             {loading ? (
               <>
                 <Loader2 className="icon spin" />
-                <span>Scraping Profile...</span>
+                <span>Scraping...</span>
               </>
             ) : (
               <>
@@ -250,6 +260,15 @@ const App = () => {
               </>
             )}
           </button>
+
+          {loading && (
+            <div className="scraping-timer">
+              <Clock className="icon spin" />
+              <span className="scraping-timer-text">
+                {(elapsedTime / 1000).toFixed(3)}s
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Results */}
@@ -258,7 +277,25 @@ const App = () => {
             {/* Results Header */}
             <div className="results-header">
               <div className="results-header-left">
-                <h2>Profile Data Extracted</h2>
+                <h2>
+                  Profile Data Extracted
+                  {result.timeSeconds && parseFloat(result.timeSeconds) < 1.0 && (
+                    <span className="speed-indicator blazing">
+                      ⚡ SUB-1s
+                    </span>
+                  )}
+                  {result.timeSeconds && parseFloat(result.timeSeconds) >= 1.0 && parseFloat(result.timeSeconds) < 2.0 && (
+                    <span className="speed-indicator ultra-fast">
+                      🚀 ULTRA FAST
+                    </span>
+                  )}
+                </h2>
+                <div className="timing-badge">
+                  <Clock className="timing-icon" />
+                  <span className="timing-text">
+                    Completed in <strong>{result.timeTaken}</strong> ({result.timeSeconds}s)
+                  </span>
+                </div>
                 <p className="results-subtitle">
                   Scraped on {new Date(result.scrapedAt).toLocaleString()}
                 </p>
@@ -467,6 +504,12 @@ const App = () => {
               <div className="info-row">
                 <span className="info-label">Scraped At:</span>
                 <span className="info-value">{new Date(result.scrapedAt).toLocaleString()}</span>
+              </div>
+              <div className="info-row">
+                <span className="info-label">Performance:</span>
+                <span className="info-value">
+                  {parseFloat(result.timeSeconds) < 1.0 ? '⚡ Lightning Fast' : '🚀 Ultra Fast'}
+                </span>
               </div>
             </div>
           </div>
