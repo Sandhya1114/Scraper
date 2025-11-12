@@ -1,5 +1,5 @@
-// INSTANT LinkedIn Profile Scraper - Shows results in <1 second
-// Strategy: Aggressive parallel scraping + instant basic info return
+// ULTRA-FAST LinkedIn Profile Scraper with AI-Powered Analysis
+// Key optimizations: Minimal delays, parallel processing, smart scrolling + Groq AI Analysis
 
 const express = require('express');
 const { chromium } = require('playwright-extra');
@@ -103,36 +103,57 @@ class LinkedInScraper {
     }
   }
 
+  async fastScroll() {
+    console.log('⚡ Fast scrolling...');
+    
+    await this.page.evaluate(() => {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' });
+    });
+    
+    await this.randomDelay(800, 1200);
+    this.expandSections().catch(() => {});
+    
+    await this.page.evaluate(() => {
+      window.scrollTo({ top: document.body.scrollHeight * 0.7, behavior: 'auto' });
+    });
+    
+    await this.randomDelay(500, 700);
+    console.log('✅ Fast scroll completed');
+  }
+
+  async expandSections() {
+    try {
+      const buttons = await this.page.$$('button[aria-label*="Show all"], button:has-text("Show all")');
+      const clickPromises = buttons.slice(0, 3).map(button => 
+        button.click({ timeout: 1000, force: true }).catch(() => {})
+      );
+      await Promise.race([
+        Promise.all(clickPromises),
+        new Promise(resolve => setTimeout(resolve, 2000))
+      ]);
+    } catch (e) {}
+  }
+
   async scrapeProfile(profileUrl) {
     try {
       if (!this.isLoggedIn) {
         throw new Error('Not logged in');
       }
 
-      console.log(`\n⚡ INSTANT SCRAPING: ${profileUrl}`);
+      console.log(`\n🔍 Scraping profile: ${profileUrl}`);
       const startTime = Date.now();
       
-      // Navigate with minimal wait
       await this.page.goto(profileUrl, { 
         waitUntil: 'domcontentloaded',
-        timeout: 10000 
+        timeout: 15000 
       });
 
-      // Wait only 200ms for basic content
-      await Promise.race([
-        this.page.waitForSelector('h1, .pv-text-details__left-panel', { timeout: 200 }),
-        new Promise(resolve => setTimeout(resolve, 200))
-      ]);
-      
-      // ONE aggressive scroll immediately
-      await this.page.evaluate(() => {
-        window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' });
+      await this.page.waitForSelector('.pv-text-details__left-panel, .ph5', { 
+        timeout: 5000 
       }).catch(() => {});
-
-      // Wait 400ms for content to load
-      await new Promise(resolve => setTimeout(resolve, 400));
-
-      // Extract ALL data in ONE SHOT - fastest possible
+      
+      await this.fastScroll();
+      
       const profileData = await this.page.evaluate(() => {
         const utils = {
           getText: (element) => {
@@ -173,7 +194,6 @@ class LinkedInScraper {
           }
         };
 
-        // Fast section finder
         const findSection = (sectionName) => {
           let section = document.getElementById(sectionName);
           if (section && section.tagName === 'SECTION') {
@@ -206,7 +226,6 @@ class LinkedInScraper {
           return null;
         };
 
-        // Basic info
         const getName = () => utils.trySelectors(['h1.text-heading-xlarge', 'h1']);
         
         const getHeadline = () => {
@@ -241,7 +260,6 @@ class LinkedInScraper {
           return texts.find(t => t.toLowerCase().includes('connection')) || null;
         };
 
-        // Experience
         const getExperience = () => {
           const list = findSection('experience');
           if (!list) return [];
@@ -262,7 +280,6 @@ class LinkedInScraper {
           }).filter(exp => exp.title && exp.title.length > 2);
         };
 
-        // Education
         const getEducation = () => {
           const list = findSection('education');
           if (!list) return [];
@@ -282,7 +299,6 @@ class LinkedInScraper {
           }).filter(edu => edu.school && edu.school.length > 2);
         };
 
-        // Skills
         const getSkills = () => {
           const list = findSection('skills');
           if (!list) return [];
@@ -306,7 +322,6 @@ class LinkedInScraper {
           return Array.from(skills).slice(0, 50);
         };
 
-        // Certifications
         const getCertifications = () => {
           const list = findSection('licenses_and_certifications');
           if (!list) return [];
@@ -325,7 +340,6 @@ class LinkedInScraper {
           }).filter(cert => cert.name);
         };
 
-        // Projects
         const getProjects = () => {
           const list = findSection('projects');
           if (!list) return [];
@@ -338,12 +352,12 @@ class LinkedInScraper {
 
             return {
               name: boldTexts[0] || spans[0] || null,
-              date: spans.find(s => s.match(/\d{4}/)) || null
+              date: spans.find(s => s.match(/\d{4}/)) || null,
+              description: utils.getText(item.querySelector('.inline-show-more-text span[aria-hidden="true"]'))
             };
           }).filter(proj => proj.name);
         };
 
-        // Languages
         const getLanguages = () => {
           const list = findSection('languages');
           if (!list) return [];
@@ -380,15 +394,13 @@ class LinkedInScraper {
 
       const timeTaken = ((Date.now() - startTime) / 1000).toFixed(2);
       
-      console.log('\n⚡ INSTANT SCRAPING COMPLETED!');
+      console.log('\n⚡ SCRAPING COMPLETED!');
       console.log('═══════════════════════════════════════');
       console.log(`⏱️  Time: ${timeTaken}s`);
       console.log(`📛 Name: ${profileData.name || '❌'}`);
-      console.log(`💼 Headline: ${profileData.headline ? '✅' : '❌'}`);
       console.log(`💼 Experience: ${profileData.experience.length} entries`);
       console.log(`🎓 Education: ${profileData.education.length} entries`);
       console.log(`⚡ Skills: ${profileData.skills.length} skills`);
-      console.log(`🏆 Certifications: ${profileData.certifications.length}`);
       console.log('═══════════════════════════════════════\n');
 
       return {
@@ -426,6 +438,138 @@ class LinkedInScraper {
   }
 }
 
+// AI Profile Analysis Function using Groq
+async function analyzeProfileWithGroq(profileData) {
+  const GROQ_API_KEY = process.env.GROQ_API_KEY;
+  
+  if (!GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY not found in environment variables');
+  }
+
+  const prompt = `You are an expert LinkedIn Profile Evaluator and Career Coach. Analyze the following LinkedIn profile data and provide a comprehensive, actionable analysis.
+
+PROFILE DATA:
+${JSON.stringify(profileData, null, 2)}
+
+YOUR TASK:
+1. Evaluate EVERY section: headline, about/summary, experience, education, skills, certifications, projects, and languages.
+2. For EACH section:
+   - Check if it exists and is complete
+   - Identify spelling, grammar, or formatting issues with corrected versions
+   - Provide specific, actionable improvements
+   - Give 2-3 rewrite examples where relevant
+   - Suggest relevant keywords for the user's field
+3. Assign a SCORE out of 100 based on:
+   - Profile completeness (30 points)
+   - Content quality & clarity (25 points)
+   - Professionalism & formatting (20 points)
+   - Keyword optimization (15 points)
+   - Overall impact (10 points)
+
+SCORING GUIDE:
+- 0-39: Poor (major issues, incomplete profile)
+- 40-69: Average (basic profile, needs improvement)
+- 70-89: Good (solid profile, minor improvements needed)
+- 90-100: Excellent (outstanding profile, recruiter-ready)
+
+OUTPUT FORMAT (JSON):
+{
+  "overallScore": <number 0-100>,
+  "scoreBreakdown": {
+    "completeness": <number>,
+    "quality": <number>,
+    "professionalism": <number>,
+    "keywords": <number>,
+    "impact": <number>
+  },
+  "rating": "<Poor|Average|Good|Excellent>",
+  "summary": "<2-3 sentence overall assessment>",
+  "sections": {
+    "headline": {
+      "exists": <boolean>,
+      "score": <number 0-10>,
+      "current": "<current text or 'Missing'>",
+      "issues": ["<issue 1>", "<issue 2>"],
+      "suggestions": ["<suggestion 1>", "<suggestion 2>"],
+      "examples": ["<example 1>", "<example 2>"],
+      "keywords": ["<keyword 1>", "<keyword 2>"]
+    },
+    "about": { /* same structure */ },
+    "experience": {
+      "exists": <boolean>,
+      "score": <number 0-10>,
+      "count": <number>,
+      "issues": ["<issue 1>"],
+      "suggestions": ["<suggestion 1>"],
+      "examples": ["<example for improving descriptions>"]
+    },
+    "education": { /* similar structure */ },
+    "skills": { /* similar structure */ },
+    "certifications": { /* similar structure */ },
+    "projects": { /* similar structure */ },
+    "languages": { /* similar structure */ }
+  },
+  "topPriorities": ["<priority 1>", "<priority 2>", "<priority 3>"],
+  "quickWins": ["<quick win 1>", "<quick win 2>"]
+}
+
+Be specific, professional, and actionable. Avoid generic advice. Focus on what will make the biggest impact for recruiters and hiring managers.`;
+
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert LinkedIn Profile Evaluator. Provide detailed, actionable feedback in valid JSON format only.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 4000
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Groq API error: ${errorData.error?.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    const analysisText = data.choices[0].message.content;
+    
+    // Extract JSON from response (in case there's markdown formatting)
+    const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('No valid JSON found in Groq response');
+    }
+    
+    const analysis = JSON.parse(jsonMatch[0]);
+    
+    return {
+      success: true,
+      analysis: analysis,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error) {
+    console.error('Groq Analysis Error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
 let scraper = null;
 let loginStatus = {
   isLoggedIn: false,
@@ -445,9 +589,9 @@ const startAutoScraper = async () => {
     return;
   }
 
-  console.log('\n🚀 INSTANT MODE ENABLED');
+  console.log('\n🚀 ULTRA-FAST MODE ENABLED');
   console.log('📧 Email:', email);
-  console.log('⚡ Results appear in <1 second\n');
+  console.log('⚡ Expected scraping time: 1-2 seconds per profile\n');
 
   try {
     loginStatus.loginInProgress = true;
@@ -460,7 +604,7 @@ const startAutoScraper = async () => {
       loginStatus.isLoggedIn = true;
       loginStatus.loginInProgress = false;
       loginStatus.error = null;
-      console.log('\n✅ READY FOR INSTANT SCRAPING!');
+      console.log('\n✅ READY FOR SCRAPING & ANALYSIS!');
       console.log('📌 Open UI: http://localhost:3001\n');
     } else {
       loginStatus.isLoggedIn = false;
@@ -476,6 +620,7 @@ const startAutoScraper = async () => {
   }
 };
 
+// API Routes
 app.post('/api/scrape-profile', async (req, res) => {
   try {
     const { profileUrl } = req.body;
@@ -506,13 +651,42 @@ app.post('/api/scrape-profile', async (req, res) => {
   }
 });
 
+app.post('/api/analyze-profile', async (req, res) => {
+  try {
+    const { profileData } = req.body;
+
+    if (!profileData) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Profile data is required' 
+      });
+    }
+
+    console.log('\n🤖 Analyzing profile with Groq AI...');
+    const analysis = await analyzeProfileWithGroq(profileData);
+    
+    if (analysis.success) {
+      console.log(`✅ Analysis complete! Score: ${analysis.analysis.overallScore}/100`);
+    }
+
+    res.json(analysis);
+
+  } catch (error) {
+    console.error('Analysis error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
 app.get('/api/status', (req, res) => {
   res.json({
     success: true,
     loggedIn: scraper ? scraper.isLoggedIn : false,
     loginInProgress: scraper ? scraper.loginInProgress : loginStatus.loginInProgress,
     error: loginStatus.error,
-    mode: 'instant',
+    mode: 'ultra-fast-with-ai',
     timestamp: new Date().toISOString()
   });
 });
@@ -533,9 +707,10 @@ app.post('/api/logout', async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    service: 'instant-linkedin-scraper',
-    version: '8.0.0-instant',
-    loginStatus: loginStatus
+    service: 'linkedin-scraper-with-ai-analysis',
+    version: '8.0.0-ai',
+    loginStatus: loginStatus,
+    groqEnabled: !!process.env.GROQ_API_KEY
   });
 });
 
@@ -551,7 +726,7 @@ process.on('SIGINT', async () => {
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`\n✅ Instant LinkedIn Scraper on port ${PORT}`);
+  console.log(`\n✅ LinkedIn Scraper + AI Analysis on port ${PORT}`);
   console.log(`🌐 http://localhost:${PORT}\n`);
   startAutoScraper();
 });
