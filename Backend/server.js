@@ -1,5 +1,5 @@
-// ULTRA-FAST LinkedIn Profile Scraper with AI-Powered Analysis
-// Key optimizations: Minimal delays, parallel processing, smart scrolling + Groq AI Analysis
+// LinkedIn Profile Scraper with Auto-Analysis Backend
+// Optimized for direct scrape-to-AI analysis workflow
 
 const express = require('express');
 const { chromium } = require('playwright-extra');
@@ -438,7 +438,7 @@ class LinkedInScraper {
   }
 }
 
-// AI Profile Analysis Function using Groq
+// AI Profile Analysis using Groq
 async function analyzeProfileWithGroq(profileData) {
   const GROQ_API_KEY = process.env.GROQ_API_KEY;
   
@@ -516,6 +516,8 @@ OUTPUT FORMAT (JSON):
 Be specific, professional, and actionable. Avoid generic advice. Focus on what will make the biggest impact for recruiters and hiring managers.`;
 
   try {
+    console.log('🤖 Sending profile to Groq AI for analysis...');
+    
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -547,13 +549,15 @@ Be specific, professional, and actionable. Avoid generic advice. Focus on what w
     const data = await response.json();
     const analysisText = data.choices[0].message.content;
     
-    // Extract JSON from response (in case there's markdown formatting)
+    // Extract JSON from response
     const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error('No valid JSON found in Groq response');
     }
     
     const analysis = JSON.parse(jsonMatch[0]);
+    
+    console.log(`✅ Analysis complete! Overall Score: ${analysis.overallScore}/100`);
     
     return {
       success: true,
@@ -562,7 +566,7 @@ Be specific, professional, and actionable. Avoid generic advice. Focus on what w
     };
 
   } catch (error) {
-    console.error('Groq Analysis Error:', error);
+    console.error('❌ Groq Analysis Error:', error);
     return {
       success: false,
       error: error.message
@@ -589,9 +593,9 @@ const startAutoScraper = async () => {
     return;
   }
 
-  console.log('\n🚀 ULTRA-FAST MODE ENABLED');
+  console.log('\n🚀 AUTO-ANALYSIS MODE ENABLED');
   console.log('📧 Email:', email);
-  console.log('⚡ Expected scraping time: 1-2 seconds per profile\n');
+  console.log('🤖 Profiles will be automatically analyzed with AI\n');
 
   try {
     loginStatus.loginInProgress = true;
@@ -604,7 +608,7 @@ const startAutoScraper = async () => {
       loginStatus.isLoggedIn = true;
       loginStatus.loginInProgress = false;
       loginStatus.error = null;
-      console.log('\n✅ READY FOR SCRAPING & ANALYSIS!');
+      console.log('\n✅ READY FOR AUTO-ANALYSIS!');
       console.log('📌 Open UI: http://localhost:3001\n');
     } else {
       loginStatus.isLoggedIn = false;
@@ -662,13 +666,7 @@ app.post('/api/analyze-profile', async (req, res) => {
       });
     }
 
-    console.log('\n🤖 Analyzing profile with Groq AI...');
     const analysis = await analyzeProfileWithGroq(profileData);
-    
-    if (analysis.success) {
-      console.log(`✅ Analysis complete! Score: ${analysis.analysis.overallScore}/100`);
-    }
-
     res.json(analysis);
 
   } catch (error) {
@@ -686,7 +684,7 @@ app.get('/api/status', (req, res) => {
     loggedIn: scraper ? scraper.isLoggedIn : false,
     loginInProgress: scraper ? scraper.loginInProgress : loginStatus.loginInProgress,
     error: loginStatus.error,
-    mode: 'ultra-fast-with-ai',
+    mode: 'auto-analysis',
     timestamp: new Date().toISOString()
   });
 });
@@ -707,8 +705,8 @@ app.post('/api/logout', async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    service: 'linkedin-scraper-with-ai-analysis',
-    version: '8.0.0-ai',
+    service: 'linkedin-auto-analyzer',
+    version: '9.0.0',
     loginStatus: loginStatus,
     groqEnabled: !!process.env.GROQ_API_KEY
   });
@@ -726,7 +724,7 @@ process.on('SIGINT', async () => {
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`\n✅ LinkedIn Scraper + AI Analysis on port ${PORT}`);
+  console.log(`\n✅ LinkedIn Auto-Analyzer running on port ${PORT}`);
   console.log(`🌐 http://localhost:${PORT}\n`);
   startAutoScraper();
 });
